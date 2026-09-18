@@ -108,16 +108,16 @@ def implied_volatility(
 def is_low_confidence(S: float, K: float, T: float, r: float, sigma: float, option_type: str = "call") -> bool:
     """
     Flags a solved implied volatility as low-confidence when the
-    contract's |delta| < LOW_CONFIDENCE_DELTA, following Duarte, Jones &
-    Wang (2024, JF). Deep OTM/near-expiry contracts have such small
-    vega that many different sigmas fit the observed price almost
-    equally well making it hard to trust the calculated sigma.
+    contract's |delta| < LOW_CONFIDENCE_DELTA (or > 1 - LOW_CONFIDENCE_DELTA),
+    following Duarte, Jones & Wang (2024, JF). Deep OTM or deep ITM
+    contracts have such small vega that many different sigmas fit the
+    observed price almost equally well, making it hard to trust the
+    calculated sigma.
 
     Meant to be checked by the caller after solving
-
-    # Note: It also flags the ITM side now (|delta| > 1 - LOW_CONFIDENCE_DELTA),
-    # as deep ITM can run into similar issues as deep OTM
-
+    
+    Note: This is a delta-only check. An ATM contract near expiry also has
+    shrinking vega but keeps delta near 0.5, so it won't be flagged here.
     """
     d = abs(delta(S, K, T, r, sigma, option_type))
     return d < LOW_CONFIDENCE_DELTA or d > 1 - LOW_CONFIDENCE_DELTA
