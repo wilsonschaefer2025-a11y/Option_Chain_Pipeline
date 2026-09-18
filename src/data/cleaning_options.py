@@ -251,47 +251,22 @@ def filter_liquidity(
     open interest, volume and quote quality. If any of these
     conditions are violated it is flagged as illiquid:
     -openInterest or volume in the bottom 'percentile' of the day's 
-        chain
+    chain
     -violated wide_spread_flag, no_live_flag, crossed_market_flag
     -stale_quote_flag
     
     Each of these violations is also stored as its own flag, so callers
     can filter on a specific signal instead of only the combined one.
     
-
-    
-
-    None of these conditions are no-arbitrage signals. This function
-    helps clean up the options before they're inputed into the 
-    the no-arbitrage function so they do not mess with it's tolerance.
-
-    # NOTE: "max_age_days" below is now max_age_trading_days -- this
-    # function forwards it to apply_staleness_flag's trading-day-aware
-    # check instead of a raw calendar-day one. Left the rest of this
-    # paragraph as-is rather than rewritten.
-
-    Flags contracts as illiquid based on open interest, volume, and quote
-    quality -- OR logic across all signals, so a contract needs only one
-    thin signal to be flagged (stricter than AND):
-      - openInterest or volume in the bottom `percentile` of that day's chain
-      - wide_spread_flag / no_live_quote_flag / crossed_market_flag (bid/ask
-        quote quality)
-      - stale_quote_flag (lastTradeDate older than max_age_days)
     None of these are no-arbitrage signals, which is why they're consumed
     here rather than affecting filter_no_arbitrage's tolerance.
-    Relative (percentile-based) thresholds, not absolute counts, so this
-    adapts across tickers/expirations without hardcoded cutoffs.
-    Missing openInterest/volume (NaN) is treated as illiquid rather than
-    silently passing the threshold check, since missing data is at least
-    as strong a thin-liquidity signal as a low reported value.
+    
+    Missing openInterest/volume (NaN) is treated as illiquid
+    
     If wide_spread_flag/no_live_quote_flag/crossed_market_flag/
     stale_quote_flag are already present (e.g. this DataFrame came from
-    filter_no_arbitrage), they're reused unchanged; otherwise this
-    computes them itself via add_mid_price/apply_spread_tolerance/
-    apply_staleness_flag, so filter_liquidity also works standalone on a
-    raw option chain.
-    Does not drop rows -- downstream consumers decide whether to exclude
-    illiquid contracts for their specific use case.
+    filter_no_arbitrage), they're reused. Otherwise this function
+    recomputes them.
     """
 
     calls = calls.copy()
@@ -339,9 +314,7 @@ def filter_contract_sanity(calls: pd.DataFrame, expected_contract_size: int = 10
     module):
       - invalid_strike_flag: strike is missing or <= 0.
       - duplicate_strike_flag: the same strike appears more than once in
-        the chain. Chain-wide like the strike-arbitrage filters (needs
-        every row to detect a duplicate), though unlike those it doesn't
-        need sorting. Rows already flagged invalid_strike_flag are
+        the chain. Rows already flagged invalid_strike_flag are
         excluded here, so a problem is only ever reported once per row.
       - nonstandard_contract_size_flag: contractSize isn't the standard
         100-shares-per-contract. This happens for "adjusted" contracts
@@ -349,13 +322,11 @@ def filter_contract_sanity(calls: pd.DataFrame, expected_contract_size: int = 10
         spin-offs, some splits) that keep trading alongside new standard
         contracts at the same strikes/expiration. It matters because
         filter_no_arbitrage's bounds (S - K*e^(-rT) <= C <= S) implicitly
-        assume a 100-share multiplier -- an adjusted contract can look
-        like a bogus arbitrage violation when it's actually just priced
-        for a different number of shares. If contractSize isn't present
+        assume a 100-share multiplier. If contractSize isn't present
         on the input at all, this flag is set to False for every row
-        (can't be determined) rather than raising.
+        as it can't be determined.
 
-    Does not drop rows -- same philosophy as the rest of this module.
+    Does not drop rows, just flags them.
     """
     calls = calls.copy()
 

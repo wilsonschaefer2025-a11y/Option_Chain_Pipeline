@@ -16,6 +16,9 @@ from src.data.cleaning_options import (
 )
 
 
+#Tests are currently set up by Claude. Looking into implementing more rigorous tests 
+#in the future. 
+
 # ---------------------------------------------------------------------------
 # add_mid_price
 # ---------------------------------------------------------------------------
