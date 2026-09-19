@@ -3,6 +3,7 @@ import pytest
 from src.pricing.black_scholes import BS_call_price, BS_put_price
 from src.pricing.implied_vol import implied_volatility, is_low_confidence
 
+#These tests are also claude. Use at your own risk
 
 # ---------------------------------------------------------------------------
 # implied_volatility

@@ -1,5 +1,6 @@
 import math
 
+import pandas as pd
 from scipy.stats import norm
 
 
@@ -37,6 +38,25 @@ def BS_put_price(S: float, K: float, T: float, r: float, sigma: float) -> float:
 
     d1, d2 = _d1_d2(S, K, T, r, sigma)
     return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+
+def BS_price_series(strikes: pd.Series, S: float, r: float, T: float, sigma: float, option_type: str = "call") -> pd.Series:
+    """
+    Vectorized Black-Scholes price across a Series of strikes, using one
+    shared S/r/T/sigma for all of them -- e.g. pricing every strike in
+    an option chain at once under one volatility assumption, rather
+    than one contract at a time like BS_call_price/BS_put_price above.
+
+    Validates option_type/sigma once up front (they're constant across
+    the whole Series) rather than per element.
+    """
+    if option_type not in ("call", "put"):
+        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+    if sigma <= 0:
+        raise ValueError("sigma must be positive.")
+
+    price_fn = BS_call_price if option_type == "call" else BS_put_price
+    return strikes.apply(lambda K: price_fn(S, K, T, r, sigma))
 
 
 def delta(S: float, K: float, T: float, r: float, sigma: float, option_type: str = "call") -> float:

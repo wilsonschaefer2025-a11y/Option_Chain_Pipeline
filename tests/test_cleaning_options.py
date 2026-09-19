@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 
 import numpy as np
@@ -13,11 +14,15 @@ from src.data.cleaning_options import (
     filter_strike_convexity,
     filter_liquidity,
     filter_contract_sanity,
+    add_implied_volatility,
+    add_theoretical_price,
 )
+from src.pricing.black_scholes import BS_call_price, BS_put_price
 
 
 #Tests are currently set up by Claude. Looking into implementing more rigorous tests 
 #in the future. 
+#Use tests at your own risk
 
 # ---------------------------------------------------------------------------
 # add_mid_price
@@ -255,6 +260,38 @@ def test_filter_no_arbitrage_does_not_mutate_input():
     assert "mid_price" not in calls.columns
 
 
+def test_filter_no_arbitrage_uses_put_bounds_when_option_type_is_put():
+    # Put upper bound is the discounted strike, not S -- a put priced
+    # above K*e^(-rT) is a violation even though it'd be fine for a call.
+    S, r, T = 100.0, 0.05, 0.5
+    K = 120.0
+    discounted_strike = K * math.exp(-r * T)
+    puts = pd.DataFrame({
+        "strike": [K],
+        "bid": [discounted_strike + 1.0], "ask": [discounted_strike + 1.2],
+        "lastPrice": [discounted_strike + 1.1],
+    })
+    result = filter_no_arbitrage(puts, S=S, r=r, T=T, option_type="put")
+    assert result["upper_bound"].iloc[0] == pytest.approx(discounted_strike)
+    assert result["no_arb_violation"].iloc[0] == True
+
+
+def test_filter_no_arbitrage_allows_a_sensible_put_price():
+    S, r, T = 100.0, 0.05, 0.5
+    puts = pd.DataFrame({
+        "strike": [90.0],
+        "bid": [1.9], "ask": [2.1], "lastPrice": [2.0],
+    })
+    result = filter_no_arbitrage(puts, S=S, r=r, T=T, option_type="put")
+    assert result["no_arb_violation"].iloc[0] == False
+
+
+def test_filter_no_arbitrage_raises_for_invalid_option_type():
+    calls = pd.DataFrame({"strike": [100.0], "bid": [2.9], "ask": [3.1], "lastPrice": [3.0]})
+    with pytest.raises(ValueError):
+        filter_no_arbitrage(calls, S=100.0, r=0.05, T=0.5, option_type="straddle")
+
+
 # ---------------------------------------------------------------------------
 # filter_strike_monotonicity
 # ---------------------------------------------------------------------------
@@ -322,6 +359,29 @@ def test_filter_strike_monotonicity_does_not_mutate_input():
     assert "mid_price" not in calls.columns
 
 
+def test_filter_strike_monotonicity_flags_a_decreasing_put_price_as_a_violation():
+    # Puts should be non-decreasing in strike -- a lower strike priced
+    # *higher* than a higher strike is a violation for puts (the
+    # opposite direction from calls).
+    puts = pd.DataFrame({
+        "strike": [90.0, 100.0],
+        "mid_price": [10.51, 10.01],
+        "tolerance": [0.01, 0.01],
+    })
+    result = filter_strike_monotonicity(puts, option_type="put")
+    assert result["monotonicity_violation"].iloc[0] == True
+
+
+def test_filter_strike_monotonicity_allows_normal_increasing_put_prices():
+    puts = pd.DataFrame({
+        "strike": [90.0, 100.0, 110.0],
+        "mid_price": [2.01, 5.01, 10.01],
+        "tolerance": [0.01, 0.01, 0.01],
+    })
+    result = filter_strike_monotonicity(puts, option_type="put")
+    assert list(result["monotonicity_violation"]) == [False, False, False]
+
+
 # ---------------------------------------------------------------------------
 # filter_strike_convexity
 # ---------------------------------------------------------------------------
@@ -348,6 +408,19 @@ def test_filter_strike_convexity_allows_normal_convex_prices():
     })
     result = filter_strike_convexity(calls)
     assert list(result["convexity_violation"]) == [False, False, False]
+
+
+def test_filter_strike_convexity_allows_real_bs_put_prices_unchanged():
+    # Convexity holds identically for puts (verified via BS_put_price
+    # directly, no direction flip needed unlike filter_no_arbitrage/
+    # filter_strike_monotonicity) -- real BS put prices across strikes
+    # should never trip this filter with no option_type param at all.
+    S, T, r, sigma = 100, 0.5, 0.05, 0.25
+    strikes = [80.0, 90.0, 100.0, 110.0, 120.0]
+    mid_prices = [BS_put_price(S, K, T, r, sigma) for K in strikes]
+    puts = pd.DataFrame({"strike": strikes, "mid_price": mid_prices, "tolerance": [0.0] * 5})
+    result = filter_strike_convexity(puts)
+    assert result["convexity_violation"].sum() == 0
 
 
 def test_filter_strike_convexity_does_not_flag_violation_within_tolerance():
@@ -657,3 +730,192 @@ def test_filter_contract_sanity_does_not_mutate_input():
     calls = pd.DataFrame({"strike": [90.0, 100.0], "contractSize": [100, 100]})
     filter_contract_sanity(calls)
     assert "invalid_strike_flag" not in calls.columns
+
+
+# ---------------------------------------------------------------------------
+# add_implied_volatility
+# ---------------------------------------------------------------------------
+
+def test_add_implied_volatility_recovers_known_sigma_from_mid_price():
+    S, K, T, r, true_sigma = 100, 100, 1, 0.05, 0.25
+    price = BS_call_price(S, K, T, r, true_sigma)
+    calls = pd.DataFrame({"strike": [K], "mid_price": [price]})
+    result = add_implied_volatility(calls, S=S, r=r, T=T)
+    assert result["implied_vol"].iloc[0] == pytest.approx(true_sigma, abs=1e-4)
+    assert result["low_confidence_iv_flag"].iloc[0] == False
+
+
+def test_add_implied_volatility_works_for_puts():
+    S, K, T, r, true_sigma = 100, 105, 0.5, 0.03, 0.3
+    price = BS_put_price(S, K, T, r, true_sigma)
+    calls = pd.DataFrame({"strike": [K], "mid_price": [price]})
+    result = add_implied_volatility(calls, S=S, r=r, T=T, option_type="put")
+    assert result["implied_vol"].iloc[0] == pytest.approx(true_sigma, abs=1e-4)
+
+
+def test_add_implied_volatility_skips_unpriceable_rows():
+    # bid/ask/lastPrice all 0 -> add_mid_price computes mid_price=0 and
+    # flags unpriceable=True. implied_volatility() would technically
+    # "succeed" on price=0 (returns a small, arbitrary-ish sigma near its
+    # tolerance) rather than raise, so this only gets skipped because we
+    # check the unpriceable flag explicitly, not because of the
+    # try/except -- worth its own test.
+    calls = pd.DataFrame({
+        "strike": [100], "bid": [0.0], "ask": [0.0], "lastPrice": [0.0],
+    })
+    result = add_implied_volatility(calls, S=100, r=0.05, T=1)
+    assert pd.isna(result["implied_vol"].iloc[0])
+    assert pd.isna(result["low_confidence_iv_flag"].iloc[0])
+
+
+def test_add_implied_volatility_skips_invalid_strike_flag_rows():
+    calls = pd.DataFrame({
+        "strike": [-5], "mid_price": [10.0], "invalid_strike_flag": [True],
+    })
+    result = add_implied_volatility(calls, S=100, r=0.05, T=1)
+    assert pd.isna(result["implied_vol"].iloc[0])
+
+
+def test_add_implied_volatility_skips_no_arb_violation_rows():
+    calls = pd.DataFrame({
+        "strike": [100], "mid_price": [10.0], "no_arb_violation": [True],
+    })
+    result = add_implied_volatility(calls, S=100, r=0.05, T=1)
+    assert pd.isna(result["implied_vol"].iloc[0])
+
+
+def test_add_implied_volatility_handles_a_mix_of_skipped_and_solvable_rows():
+    # One solvable row and one skipped row in the same chain -- the skip
+    # shouldn't affect the other row's result.
+    S, r, T, true_sigma = 100, 0.05, 1, 0.3
+    good_price = BS_call_price(S, 100, T, r, true_sigma)
+    calls = pd.DataFrame({
+        "strike": [100, 90],
+        "mid_price": [good_price, 5.0],
+        "unpriceable": [False, True],
+    })
+    result = add_implied_volatility(calls, S=S, r=r, T=T)
+    assert result["implied_vol"].iloc[0] == pytest.approx(true_sigma, abs=1e-4)
+    assert pd.isna(result["implied_vol"].iloc[1])
+
+
+def test_add_implied_volatility_flags_low_confidence_for_deep_otm():
+    S, K, T, r, true_sigma = 100, 150, 0.1, 0.05, 0.2
+    price = BS_call_price(S, K, T, r, true_sigma)
+    calls = pd.DataFrame({"strike": [K], "mid_price": [price]})
+    result = add_implied_volatility(calls, S=S, r=r, T=T)
+    assert result["low_confidence_iv_flag"].iloc[0] == True
+
+
+def test_add_implied_volatility_computes_mid_price_when_missing():
+    # No mid_price column supplied -- should compute it via add_mid_price
+    # so this also works standalone on a raw chain.
+    S, K, T, r, true_sigma = 100, 100, 1, 0.05, 0.25
+    price = BS_call_price(S, K, T, r, true_sigma)
+    calls = pd.DataFrame({
+        "strike": [K], "bid": [price - 0.01], "ask": [price + 0.01], "lastPrice": [price],
+    })
+    result = add_implied_volatility(calls, S=S, r=r, T=T)
+    assert "mid_price" in result.columns
+    assert result["implied_vol"].iloc[0] == pytest.approx(true_sigma, abs=1e-4)
+
+
+def test_add_implied_volatility_does_not_mutate_input():
+    S, K, T, r, true_sigma = 100, 100, 1, 0.05, 0.25
+    price = BS_call_price(S, K, T, r, true_sigma)
+    calls = pd.DataFrame({"strike": [K], "mid_price": [price]})
+    add_implied_volatility(calls, S=S, r=r, T=T)
+    assert "implied_vol" not in calls.columns
+
+
+# ---------------------------------------------------------------------------
+# add_theoretical_price
+# ---------------------------------------------------------------------------
+
+def test_add_theoretical_price_matches_bs_call_price_directly():
+    S, K, T, r, sigma = 100, 100, 1, 0.05, 0.25
+    calls = pd.DataFrame({"strike": [K], "mid_price": [12.0]})
+    result = add_theoretical_price(calls, S=S, r=r, T=T, sigma=sigma)
+    assert result["bs_price"].iloc[0] == pytest.approx(BS_call_price(S, K, T, r, sigma))
+
+
+def test_add_theoretical_price_works_for_puts():
+    S, K, T, r, sigma = 100, 105, 0.5, 0.03, 0.3
+    calls = pd.DataFrame({"strike": [K], "mid_price": [10.0]})
+    result = add_theoretical_price(calls, S=S, r=r, T=T, sigma=sigma, option_type="put")
+    assert result["bs_price"].iloc[0] == pytest.approx(BS_put_price(S, K, T, r, sigma))
+
+
+def test_add_theoretical_price_computes_price_diff_against_mid_price():
+    S, K, T, r, sigma = 100, 100, 1, 0.05, 0.25
+    bs_price = BS_call_price(S, K, T, r, sigma)
+    calls = pd.DataFrame({"strike": [K], "mid_price": [bs_price + 2.0]})
+    result = add_theoretical_price(calls, S=S, r=r, T=T, sigma=sigma)
+    # Market price is $2 above the model price -- rich relative to sigma.
+    assert result["price_diff"].iloc[0] == pytest.approx(2.0)
+
+
+def test_add_theoretical_price_still_prices_unpriceable_and_no_arb_violation_rows():
+    # Unlike add_implied_volatility, this doesn't depend on the row's own
+    # price being trustworthy -- sigma is external -- so these rows
+    # should still get a theoretical price rather than being skipped.
+    S, K, T, r, sigma = 100, 100, 1, 0.05, 0.25
+    calls = pd.DataFrame({
+        "strike": [K, K],
+        "mid_price": [0.0, 999.0],
+        "unpriceable": [True, False],
+        "no_arb_violation": [False, True],
+    })
+    result = add_theoretical_price(calls, S=S, r=r, T=T, sigma=sigma)
+    expected = BS_call_price(S, K, T, r, sigma)
+    assert result["bs_price"].iloc[0] == pytest.approx(expected)
+    assert result["bs_price"].iloc[1] == pytest.approx(expected)
+
+
+def test_add_theoretical_price_skips_invalid_strike_flag_rows():
+    calls = pd.DataFrame({
+        "strike": [-5], "mid_price": [10.0], "invalid_strike_flag": [True],
+    })
+    result = add_theoretical_price(calls, S=100, r=0.05, T=1, sigma=0.25)
+    assert pd.isna(result["bs_price"].iloc[0])
+    assert pd.isna(result["price_diff"].iloc[0])
+
+
+def test_add_theoretical_price_computes_mid_price_when_missing():
+    S, K, T, r, sigma = 100, 100, 1, 0.05, 0.25
+    calls = pd.DataFrame({
+        "strike": [K], "bid": [11.9], "ask": [12.1], "lastPrice": [12.0],
+    })
+    result = add_theoretical_price(calls, S=S, r=r, T=T, sigma=sigma)
+    assert "mid_price" in result.columns
+    assert result["price_diff"].iloc[0] == pytest.approx(12.0 - result["bs_price"].iloc[0])
+
+
+def test_add_theoretical_price_raises_for_invalid_option_type():
+    calls = pd.DataFrame({"strike": [100], "mid_price": [10.0]})
+    with pytest.raises(ValueError):
+        add_theoretical_price(calls, S=100, r=0.05, T=1, sigma=0.25, option_type="straddle")
+
+
+def test_add_theoretical_price_raises_for_non_positive_sigma():
+    calls = pd.DataFrame({"strike": [100], "mid_price": [10.0]})
+    with pytest.raises(ValueError):
+        add_theoretical_price(calls, S=100, r=0.05, T=1, sigma=0.0)
+
+
+def test_add_theoretical_price_validates_sigma_even_when_every_row_is_skipped():
+    # BS_price_series (where sigma is normally validated) never actually
+    # gets called when every row is flagged invalid_strike_flag -- sigma
+    # must still be validated unconditionally, not just as a side effect
+    # of pricing at least one row.
+    calls = pd.DataFrame({
+        "strike": [-5], "mid_price": [10.0], "invalid_strike_flag": [True],
+    })
+    with pytest.raises(ValueError):
+        add_theoretical_price(calls, S=100, r=0.05, T=1, sigma=0.0)
+
+
+def test_add_theoretical_price_does_not_mutate_input():
+    calls = pd.DataFrame({"strike": [100], "mid_price": [10.0]})
+    add_theoretical_price(calls, S=100, r=0.05, T=1, sigma=0.25)
+    assert "bs_price" not in calls.columns

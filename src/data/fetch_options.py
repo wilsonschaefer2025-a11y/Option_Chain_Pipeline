@@ -206,3 +206,53 @@ def trading_days_since(dates: pd.Series, stock_exchange: str, reference_time=Non
 
     return dates.apply(sessions_elapsed)
 
+
+def historical_volatility(ticker_symbol: str, period: str = "1y") -> float:
+    """
+    Computes the annualized realized (historical) volatility for a ticker
+    using its daily price movements. (This is different from implied
+    volatility, which is calculated using the option's price). This
+    sigma is independent of every option's price in the chain so it can be 
+    used to price a chain without circularly reusing a contract's own 
+    price against itself.
+
+    period is a yfinance history period string (e.g "1y"). The function
+    annualizes daily log-return volatility using the standard 
+    252-trading-days-per-year-convention.
+
+    Note: The function returns a single flat number. This means
+    the function can't capture volatility smile/skew seen in
+    real option chains. Thus be cautious when using this result
+    as feeding this one sigma into add_theoretical_price for 
+    every strike will misprice that skew. To get a per-strike 
+    sigma instead, use each contract's own add_implied_volatility()
+    result directly, or fit a curve across those same results with
+    fit_volatility_smile()/smile_iv() (src/pricing/smile.py) to also
+    cover strikes add_implied_volatility couldn't solve cleanly.
+    It should be noted that Neither plugs directly into 
+    add_theoretical_price, though. 
+
+    Another note: period has no awareness of T. It's a static lookback 
+    regardless of what expiration you're pricing. This is important to
+    consider as volatility clusters in time so the default of "1y"
+    can run into issues for a short-dated option. 
+
+    Uses the zero-mean RMS convention (sqrt(mean(log_returns**2))), 
+    not sample standard deviation, since daily drift is assumed to
+    be ~0 over short horizons. The two usually differ only slightly
+    but sample std increasingly understates true dispersion the stronger
+    a stock's sustained drift is relative to its daily volatility. 
+    """
+    ticker = yf.Ticker(ticker_symbol)
+    hist = ticker.history(period=period)
+    if len(hist) < 2:
+        raise ValueError(
+            f"Not enough price history for '{ticker_symbol}' over period={period!r} "
+            f"to compute historical volatility."
+        )
+
+    log_returns = np.log(hist["Close"] / hist["Close"].shift(1)).dropna()
+    daily_volatility = np.sqrt(np.mean(log_returns ** 2))
+
+    return daily_volatility * math.sqrt(252)
+

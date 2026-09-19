@@ -1,9 +1,11 @@
 import math
 
+import pandas as pd
 import pytest
 
-from src.pricing.black_scholes import BS_call_price, BS_put_price, delta, vega
+from src.pricing.black_scholes import BS_call_price, BS_put_price, BS_price_series, delta, vega
 
+#Test from claude, use at your own risk
 
 # ---------------------------------------------------------------------------
 # BS_call_price / BS_put_price
@@ -133,3 +135,41 @@ def test_delta_raises_for_invalid_option_type():
 def test_delta_raises_for_non_positive_sigma():
     with pytest.raises(ValueError):
         delta(S=100, K=100, T=1, r=0.05, sigma=0.0, option_type="call")
+
+
+# ---------------------------------------------------------------------------
+# BS_price_series
+# ---------------------------------------------------------------------------
+
+def test_BS_price_series_matches_BS_call_price_elementwise():
+    S, T, r, sigma = 100, 1, 0.05, 0.2
+    strikes = pd.Series([90, 100, 110])
+    result = BS_price_series(strikes, S=S, r=r, T=T, sigma=sigma)
+    expected = [BS_call_price(S, K, T, r, sigma) for K in strikes]
+    assert list(result) == pytest.approx(expected)
+
+
+def test_BS_price_series_works_for_puts():
+    S, T, r, sigma = 100, 1, 0.05, 0.2
+    strikes = pd.Series([90, 100, 110])
+    result = BS_price_series(strikes, S=S, r=r, T=T, sigma=sigma, option_type="put")
+    expected = [BS_put_price(S, K, T, r, sigma) for K in strikes]
+    assert list(result) == pytest.approx(expected)
+
+
+def test_BS_price_series_preserves_index():
+    # A caller pricing a subset of a DataFrame (e.g. calls.loc[mask, "strike"])
+    # needs the result indexed the same way to reassemble correctly.
+    strikes = pd.Series([90, 110], index=[3, 7])
+    result = BS_price_series(strikes, S=100, r=0.05, T=1, sigma=0.2)
+    assert list(result.index) == [3, 7]
+
+
+def test_BS_price_series_raises_for_invalid_option_type():
+    with pytest.raises(ValueError):
+        BS_price_series(pd.Series([100]), S=100, r=0.05, T=1, sigma=0.2, option_type="straddle")
+
+
+def test_BS_price_series_raises_for_non_positive_sigma():
+    with pytest.raises(ValueError):
+        BS_price_series(pd.Series([100]), S=100, r=0.05, T=1, sigma=0.0)

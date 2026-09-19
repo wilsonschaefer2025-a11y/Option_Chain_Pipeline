@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 
 from src.data.fetch_options import trading_days_since
+from src.pricing.implied_vol import implied_volatility, is_low_confidence
+from src.pricing.black_scholes import BS_price_series
 
 
 def add_mid_price(calls: pd.DataFrame) -> pd.DataFrame:
@@ -100,24 +102,39 @@ def apply_spread_tolerance(
     return calls
 
 
-def filter_no_arbitrage(calls: pd.DataFrame, S: float, r: float, T: float) -> pd.DataFrame:
+def filter_no_arbitrage(calls: pd.DataFrame, S: float, r: float, T: float, option_type: str = "call") -> pd.DataFrame:
     """
     Flags no-arbitrage violations, allowing a tolerance (calculated in last function)
-    to absorb some market noise instead of flagging economincally meaningless 
-    small violations. Rows with no live quote get zero tolerance. 
+    to absorb some market noise instead of flagging economincally meaningless
+    small violations. Rows with no live quote get zero tolerance.
 
-    T is the time to expiration in years taken from time_to_expiration. 
-    This must be computed before passing into the function. 
+    T is the time to expiration in years taken from time_to_expiration.
+    This must be computed before passing into the function.
     This function does not calculate T or grab it from somewhere else.
+
+    option_type selects which no-arbitrage bounds apply: calls use
+    max(S - K*e^(-rT), 0) <= C <= S; puts use max(K*e^(-rT) - S, 0)
+    <= P <= K*e^(-rT). 
     
+    Note: The "calls" parameter name is kept for consistency
+    as this was originally built for calls but this also works
+    with a puts DataFrame via option_type="put".
     """
+    if option_type not in ("call", "put"):
+        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
 
     calls = calls.copy()
     calls = add_mid_price(calls)
     calls = apply_spread_tolerance(calls)
 
-    lower_bound = np.maximum(S - calls["strike"] * np.exp(-r * T), 0)
-    upper_bound = S
+    discounted_strike = calls["strike"] * np.exp(-r * T)
+
+    if option_type == "call":
+        lower_bound = np.maximum(S - discounted_strike, 0)
+        upper_bound = S
+    else:
+        lower_bound = np.maximum(discounted_strike - S, 0)
+        upper_bound = discounted_strike
 
     calls["lower_bound"] = lower_bound
     calls["upper_bound"] = upper_bound
@@ -130,24 +147,33 @@ def filter_no_arbitrage(calls: pd.DataFrame, S: float, r: float, T: float) -> pd
 
     return calls
 
-def filter_strike_monotonicity(calls: pd.DataFrame) -> pd.DataFrame:
+def filter_strike_monotonicity(calls: pd.DataFrame, option_type: str = "call") -> pd.DataFrame:
     """
     Flags call prices that violate strike monotonicity:
-    If a strike K1<K2 (assuming same expiration), then C(K1) should 
+    If a strike K1<K2 (assuming same expiration), then C(K1) should
     never be less then C(K2).
 
-    Note: Unlike other functions this function is chain-wide not 
+    Note: Unlike other functions this function is chain-wide not
     row-wise. This is because it needs every strike for one
-    expiration, sorted, to compare each contract against its 
-    immediate neighbor. Without the sorting, the function 
-    could compare non-adjacent strikes. The returned 
-    DataFrame is sorted by strike (ascending), 
-    which may reorder rows relative to the input. 
+    expiration, sorted, to compare each contract against its
+    immediate neighbor. Without the sorting, the function
+    could compare non-adjacent strikes. The returned
+    DataFrame is sorted by strike (ascending),
+    which may reorder rows relative to the input.
 
     Reuses mid_price and tolerance. This function also uses tolerance
-    to avoid flagging meaningessly small violations. 
+    to avoid flagging meaningessly small violations.
 
+    option_type controls which direction counts as a violation. The
+    call case above holds: K1<K2 => C(K1) >= C(K2), non-increasing in
+    strike. Puts are the opposite: P is non-decreasing in strike
+    (K1<K2 => P(K1) <= P(K2)), since the right to sell at a higher
+    strike is worth more, not less.
     """
+
+    if option_type not in ("call", "put"):
+        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+
     calls = calls.copy()
 
     if "mid_price" not in calls.columns or "tolerance" not in calls.columns:
@@ -160,7 +186,10 @@ def filter_strike_monotonicity(calls: pd.DataFrame) -> pd.DataFrame:
     next_tolerance = calls["tolerance"].shift(-1)
     combined_tolerance = calls["tolerance"] + next_tolerance
 
-    calls["monotonicity_violation"] = next_price > calls["mid_price"] + combined_tolerance
+    if option_type == "call":
+        calls["monotonicity_violation"] = next_price > calls["mid_price"] + combined_tolerance
+    else:
+        calls["monotonicity_violation"] = next_price < calls["mid_price"] - combined_tolerance
 
     return calls
 
@@ -339,5 +368,113 @@ def filter_contract_sanity(calls: pd.DataFrame, expected_contract_size: int = 10
         calls["nonstandard_contract_size_flag"] = calls["contractSize"] != expected_contract_size
     else:
         calls["nonstandard_contract_size_flag"] = False
+
+    return calls
+
+def add_implied_volatility(calls: pd.DataFrame, S: float, r: float, T: float, option_type: str = "call") -> pd.DataFrame:
+    """
+    Adds implied_vol and low_confidence_iv_flag columns by solving each
+    row's mid_price for its Black-Scholes implied volatility (see
+    src/pricing/implied_vol.py).
+
+    Skips rows already flagged unpriceable, invalid_strike_flag, or
+    no_arb_violation. This is particularly important because unpriceable
+    options won't automatically raise an error causing implied_volatility()
+    to generate a misleading sigma. Skipped rows, and rows where 
+    implied_volatility() raises get NA in both new columns. 
+
+    Reuses mid_price (via add_mid_price if missing), so this also works
+    standalone on a raw chain.
+
+    T is the time to expiration in years,
+    Note: It must be computed via time_to_expiration before calling this. 
+   
+    S/r are also constant across the whole chain 
+    (one spot price, one risk-free rate), same as filter_no_arbitrage.
+    """
+    calls = calls.copy()
+
+    if "mid_price" not in calls.columns:
+        calls = add_mid_price(calls)
+
+    skip = pd.Series(False, index=calls.index)
+    for flag_col in ("unpriceable", "invalid_strike_flag", "no_arb_violation"):
+        if flag_col in calls.columns:
+            skip = skip | calls[flag_col]
+
+    implied_vols = pd.array([pd.NA] * len(calls), dtype="Float64")
+    low_confidence = pd.array([pd.NA] * len(calls), dtype="boolean")
+
+    for pos in range(len(calls)):
+        if skip.iloc[pos]:
+            continue
+
+        strike = calls["strike"].iloc[pos]
+        price = calls["mid_price"].iloc[pos]
+
+        try:
+            sigma = implied_volatility(price, S, strike, T, r, option_type=option_type)
+        except ValueError:
+            continue
+
+        implied_vols[pos] = sigma
+        low_confidence[pos] = is_low_confidence(S, strike, T, r, sigma, option_type=option_type)
+
+    calls["implied_vol"] = implied_vols
+    calls["low_confidence_iv_flag"] = low_confidence
+
+    return calls
+
+def add_theoretical_price(calls: pd.DataFrame, S: float, r: float, T: float, sigma: float, option_type: str = "call") -> pd.DataFrame:
+    """
+    Adds a bs_price column (the Black-Scholes theoretical price) for each
+    row, using an externally-supllied sigma (e.g. historical volatility()
+    from fetch_options.py). Do not use the contract's own solved
+    implied_vol as it will create circular logic. 
+
+    Also adds price_diff = mid_price - bs_price (reuses mid_price, via
+    add_mid_price if missing). If positive means the market is pricing
+    this contract above the theoretical price and vice versa for
+    negative. 
+
+    Only skips rows flagged invalid_strike_flag. Unlike 
+    add_implied_volatility, this function doesn't depend on
+    a row's own price being trustworthy as sigma comes from 
+    outside the chain so unpriceable/no_arb_violation rows 
+    still get a theoritical price. If filter_contract_sanity
+    hasn't been run (no invalid_strike_flag column), 
+    a bad strike will raise instead of being skipped. 
+
+    The actual Black-Scholes math is done by BS_price_series 
+    function. This was done so BS_price_series
+    stays a pure pricing-layer function without need
+    for cleaning-specific flags or mid_price. It's also
+    important as it avoids circular imports. 
+
+    option_type/sigma are validated here unconditionally (not just
+    inside BS_price_series) so a bad value still raises even if every
+    row happens to be skipped and BS_price_series is never actually
+    called.
+    """
+    if option_type not in ("call", "put"):
+        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+    if sigma <= 0:
+        raise ValueError("sigma must be positive.")
+
+    calls = calls.copy()
+
+    if "mid_price" not in calls.columns:
+        calls = add_mid_price(calls)
+
+    skip = calls["invalid_strike_flag"] if "invalid_strike_flag" in calls.columns else pd.Series(False, index=calls.index)
+    priceable = ~skip
+
+    bs_prices = pd.array([pd.NA] * len(calls), dtype="Float64")
+    if priceable.any():
+        priced = BS_price_series(calls.loc[priceable, "strike"], S, r, T, sigma, option_type)
+        bs_prices[priceable.to_numpy()] = pd.array(priced, dtype="Float64")
+
+    calls["bs_price"] = bs_prices
+    calls["price_diff"] = calls["mid_price"] - calls["bs_price"]
 
     return calls
