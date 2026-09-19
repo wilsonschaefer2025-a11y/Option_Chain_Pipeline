@@ -6,6 +6,9 @@ import numpy as np
 from src.pricing.smile import smile_iv
 
 
+#Visulizations done entirely by Claude. Will look into adding stuff 
+#and revamping this in the future
+
 def plot_smile(chain, S: float, coeffs, ax=None):
     """
     Plots implied vol against strike: a scatter of the chain's own
