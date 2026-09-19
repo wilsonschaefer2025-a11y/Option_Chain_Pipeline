@@ -478,3 +478,77 @@ def add_theoretical_price(calls: pd.DataFrame, S: float, r: float, T: float, sig
     calls["price_diff"] = calls["mid_price"] - calls["bs_price"]
 
     return calls
+
+def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r: float, T: float) -> pd.DataFrame:
+    """
+    Cross-checks calls against puts at matching strikes using put-call
+    parity: C - P == S - K*e^(-rT). Unlike every other filter in this
+    module, this is a pure no-arbitrage identity -- it needs no
+    volatility assumption at all, since it just compares the two sides
+    of the market against each other directly rather than against a
+    theoretical price.
+
+    Reuses mid_price/tolerance on both calls and puts (via
+    add_mid_price/apply_spread_tolerance if missing). Matches strikes
+    present in both chains (inner join) -- a strike only listed as a
+    call or only as a put can't be checked, and is silently excluded
+    rather than flagged.
+
+    Skips (NA, not False) rows where either side is already flagged
+    unpriceable or invalid_strike_flag, if those columns are present --
+    same reasoning as add_implied_volatility: an unpriceable/invalid
+    quote makes the comparison meaningless, not informative, so it
+    shouldn't read as "checked and clean."
+
+    parity_violation flags |residual| beyond the combined tolerance of
+    both sides (call tolerance + put tolerance) -- same "flag beyond
+    combined tolerance" pattern as filter_strike_monotonicity/convexity.
+
+    Returns a new DataFrame, one row per matched strike -- not calls or
+    puts modified in place, since this produces new joint information
+    rather than augmenting either existing chain on its own.
+    """
+    calls = calls.copy()
+    puts = puts.copy()
+
+    if "mid_price" not in calls.columns or "tolerance" not in calls.columns:
+        calls = add_mid_price(calls)
+        calls = apply_spread_tolerance(calls)
+    if "mid_price" not in puts.columns or "tolerance" not in puts.columns:
+        puts = add_mid_price(puts)
+        puts = apply_spread_tolerance(puts)
+
+    keep_cols = ["strike", "mid_price", "tolerance", "unpriceable", "invalid_strike_flag"]
+    call_cols = [c for c in keep_cols if c in calls.columns]
+    put_cols = [c for c in keep_cols if c in puts.columns]
+
+    merged = pd.merge(calls[call_cols], puts[put_cols], on="strike", suffixes=("_call", "_put"))
+
+    skip = pd.Series(False, index=merged.index)
+    for flag_col in ("unpriceable", "invalid_strike_flag"):
+        if f"{flag_col}_call" in merged.columns:
+            skip = skip | merged[f"{flag_col}_call"]
+        if f"{flag_col}_put" in merged.columns:
+            skip = skip | merged[f"{flag_col}_put"]
+
+    checkable = ~skip
+
+    residuals = pd.array([pd.NA] * len(merged), dtype="Float64")
+    violations = pd.array([pd.NA] * len(merged), dtype="boolean")
+
+    if checkable.any():
+        discounted_strike = merged.loc[checkable, "strike"] * np.exp(-r * T)
+        parity_rhs = S - discounted_strike
+        parity_lhs = merged.loc[checkable, "mid_price_call"] - merged.loc[checkable, "mid_price_put"]
+        residual = parity_lhs - parity_rhs
+
+        combined_tolerance = merged.loc[checkable, "tolerance_call"] + merged.loc[checkable, "tolerance_put"]
+        violation = residual.abs() > combined_tolerance
+
+        residuals[checkable.to_numpy()] = pd.array(residual, dtype="Float64")
+        violations[checkable.to_numpy()] = pd.array(violation, dtype="boolean")
+
+    merged["parity_residual"] = residuals
+    merged["parity_violation"] = violations
+
+    return merged

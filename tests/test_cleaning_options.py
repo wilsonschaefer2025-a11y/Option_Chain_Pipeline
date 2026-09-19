@@ -16,6 +16,7 @@ from src.data.cleaning_options import (
     filter_contract_sanity,
     add_implied_volatility,
     add_theoretical_price,
+    filter_put_call_parity,
 )
 from src.pricing.black_scholes import BS_call_price, BS_put_price
 
@@ -919,3 +920,101 @@ def test_add_theoretical_price_does_not_mutate_input():
     calls = pd.DataFrame({"strike": [100], "mid_price": [10.0]})
     add_theoretical_price(calls, S=100, r=0.05, T=1, sigma=0.25)
     assert "bs_price" not in calls.columns
+
+
+# ---------------------------------------------------------------------------
+# filter_put_call_parity
+# ---------------------------------------------------------------------------
+
+def test_filter_put_call_parity_holds_for_real_bs_prices():
+    # Parity holds exactly by construction for real BS call/put prices at
+    # the same S/K/T/r/sigma, so this should never flag a violation.
+    S, T, r, sigma = 100, 0.5, 0.05, 0.25
+    strikes = [90, 100, 110]
+    calls = pd.DataFrame({
+        "strike": strikes,
+        "mid_price": [BS_call_price(S, K, T, r, sigma) for K in strikes],
+        "tolerance": [1e-9] * 3,
+    })
+    puts = pd.DataFrame({
+        "strike": strikes,
+        "mid_price": [BS_put_price(S, K, T, r, sigma) for K in strikes],
+        "tolerance": [1e-9] * 3,
+    })
+    result = filter_put_call_parity(calls, puts, S=S, r=r, T=T)
+    assert result["parity_violation"].sum() == 0
+    assert list(result["parity_residual"]) == pytest.approx([0.0, 0.0, 0.0], abs=1e-8)
+
+
+def test_filter_put_call_parity_flags_violation_beyond_tolerance():
+    S, r, T = 100.0, 0.05, 0.5
+    K = 100.0
+    discounted_strike = K * math.exp(-r * T)
+    # Real C-P should equal S - discounted_strike; make it off by $5.
+    calls = pd.DataFrame({"strike": [K], "mid_price": [10.0 + 5.0], "tolerance": [0.01]})
+    puts = pd.DataFrame({"strike": [K], "mid_price": [10.0 - (S - discounted_strike)], "tolerance": [0.01]})
+    result = filter_put_call_parity(calls, puts, S=S, r=r, T=T)
+    assert result["parity_violation"].iloc[0] == True
+
+
+def test_filter_put_call_parity_does_not_flag_violation_within_tolerance():
+    S, r, T = 100.0, 0.05, 0.5
+    K = 100.0
+    discounted_strike = K * math.exp(-r * T)
+    call_price = 12.0
+    # put price chosen so C - P is off from parity by only $0.02, inside
+    # the combined $0.05 tolerance.
+    put_price = call_price - (S - discounted_strike) + 0.02
+    calls = pd.DataFrame({"strike": [K], "mid_price": [call_price], "tolerance": [0.025]})
+    puts = pd.DataFrame({"strike": [K], "mid_price": [put_price], "tolerance": [0.025]})
+    result = filter_put_call_parity(calls, puts, S=S, r=r, T=T)
+    assert result["parity_violation"].iloc[0] == False
+
+
+def test_filter_put_call_parity_only_matches_common_strikes():
+    calls = pd.DataFrame({"strike": [90.0, 100.0, 110.0], "mid_price": [12.0, 8.0, 5.0], "tolerance": [0.0] * 3})
+    puts = pd.DataFrame({"strike": [100.0, 110.0, 120.0], "mid_price": [3.0, 6.0, 10.0], "tolerance": [0.0] * 3})
+    result = filter_put_call_parity(calls, puts, S=100.0, r=0.05, T=0.5)
+    assert list(result["strike"]) == [100.0, 110.0]
+
+
+def test_filter_put_call_parity_skips_unpriceable_rows_with_na_not_false():
+    calls = pd.DataFrame({
+        "strike": [100.0], "mid_price": [8.0], "tolerance": [0.0], "unpriceable": [True],
+    })
+    puts = pd.DataFrame({
+        "strike": [100.0], "mid_price": [3.0], "tolerance": [0.0], "unpriceable": [False],
+    })
+    result = filter_put_call_parity(calls, puts, S=100.0, r=0.05, T=0.5)
+    assert pd.isna(result["parity_violation"].iloc[0])
+    assert pd.isna(result["parity_residual"].iloc[0])
+
+
+def test_filter_put_call_parity_skips_invalid_strike_flag_rows():
+    calls = pd.DataFrame({
+        "strike": [-5.0], "mid_price": [8.0], "tolerance": [0.0], "invalid_strike_flag": [True],
+    })
+    puts = pd.DataFrame({
+        "strike": [-5.0], "mid_price": [3.0], "tolerance": [0.0], "invalid_strike_flag": [True],
+    })
+    result = filter_put_call_parity(calls, puts, S=100.0, r=0.05, T=0.5)
+    assert pd.isna(result["parity_violation"].iloc[0])
+
+
+def test_filter_put_call_parity_computes_mid_price_when_missing():
+    S, T, r, sigma = 100, 0.5, 0.05, 0.25
+    K = 100
+    call_price = BS_call_price(S, K, T, r, sigma)
+    put_price = BS_put_price(S, K, T, r, sigma)
+    calls = pd.DataFrame({"strike": [K], "bid": [call_price - 0.01], "ask": [call_price + 0.01], "lastPrice": [call_price]})
+    puts = pd.DataFrame({"strike": [K], "bid": [put_price - 0.01], "ask": [put_price + 0.01], "lastPrice": [put_price]})
+    result = filter_put_call_parity(calls, puts, S=S, r=r, T=T)
+    assert result["parity_violation"].iloc[0] == False
+
+
+def test_filter_put_call_parity_does_not_mutate_input():
+    calls = pd.DataFrame({"strike": [100.0], "mid_price": [8.0], "tolerance": [0.0]})
+    puts = pd.DataFrame({"strike": [100.0], "mid_price": [3.0], "tolerance": [0.0]})
+    filter_put_call_parity(calls, puts, S=100.0, r=0.05, T=0.5)
+    assert "parity_violation" not in calls.columns
+    assert "parity_violation" not in puts.columns
