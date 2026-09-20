@@ -47,12 +47,9 @@ def BS_put_price(S: float, K: float, T: float, r: float, sigma: float) -> float:
 def BS_price_series(strikes: pd.Series, S: float, r: float, T: float, sigma: float, option_type: str = "call") -> pd.Series:
     """
     Vectorized Black-Scholes price across a Series of strikes, using one
-    shared S/r/T/sigma for all of them -- e.g. pricing every strike in
-    an option chain at once under one volatility assumption, rather
-    than one contract at a time like BS_call_price/BS_put_price above.
+    shared S/r/T/sigma for all of them.
 
-    Validates option_type/sigma once up front (they're constant across
-    the whole Series) rather than per element.
+    Validates option_type/sigma once up front rather than per element.
     """
     if option_type not in ("call", "put"):
         raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")

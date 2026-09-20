@@ -9,7 +9,9 @@ from src.pricing.black_scholes import BS_price_series
 def add_mid_price(calls: pd.DataFrame) -> pd.DataFrame:
     """
     Adds a mid_price column: (bid+ask)/2 when at least one side has 
-    a live quote. (Note: bid=0 with ask>0 is considered a live quote).
+    a live quote. 
+    
+    (Note: bid=0 with ask>0 is considered a live quote).
     Falls back to lastPrice if both bid and ask equal zero. 
     Flags rows as unpriceable when the resulting mid_price is zero.
     (No live quote on either side and no recent trade price)
@@ -38,6 +40,7 @@ def apply_spread_tolerance(
 ):
     """
     Adds a no-arbitrage tolerance column.
+
     Additionally adds quote-quality flags: wide_spread_flag, no_live_quote flag,
     crossed_market_flag. These flags are used by filter_liquidity
     
@@ -105,8 +108,7 @@ def apply_spread_tolerance(
 def filter_no_arbitrage(calls: pd.DataFrame, S: float, r: float, T: float, option_type: str = "call") -> pd.DataFrame:
     """
     Flags no-arbitrage violations, allowing a tolerance (calculated in last function)
-    to absorb some market noise instead of flagging economincally meaningless
-    small violations. Rows with no live quote get zero tolerance.
+    to absorb some market noise. Rows with no live quote get zero tolerance.
 
     T is the time to expiration in years taken from time_to_expiration.
     This must be computed before passing into the function.
@@ -149,9 +151,7 @@ def filter_no_arbitrage(calls: pd.DataFrame, S: float, r: float, T: float, optio
 
 def filter_strike_monotonicity(calls: pd.DataFrame, option_type: str = "call") -> pd.DataFrame:
     """
-    Flags call prices that violate strike monotonicity:
-    If a strike K1<K2 (assuming same expiration), then C(K1) should
-    never be less then C(K2).
+    Flags call prices that violate strike monotonicity.
 
     Note: Unlike other functions this function is chain-wide not
     row-wise. This is because it needs every strike for one
@@ -196,6 +196,7 @@ def filter_strike_monotonicity(calls: pd.DataFrame, option_type: str = "call") -
 def filter_strike_convexity(calls: pd.DataFrame) -> pd.DataFrame:
     """
     Flags call prices that violate strike convexity:
+    
     Uses the general convexity condition so it can handle unequally-spaced 
     options:
         For any three strikes K1 < K2 < K3 (same underlying/expiration)
@@ -338,9 +339,7 @@ def filter_liquidity(
 
 def filter_contract_sanity(calls: pd.DataFrame, expected_contract_size: int = 100) -> pd.DataFrame:
     """
-    Flags basic structural problems with a contract row, as opposed to
-    problems with its quoted price (unlike every other filter in this
-    module):
+    Flags basic structural problems with a contract row:
       - invalid_strike_flag: strike is missing or <= 0.
       - duplicate_strike_flag: the same strike appears more than once in
         the chain. Rows already flagged invalid_strike_flag are
@@ -482,8 +481,7 @@ def add_theoretical_price(calls: pd.DataFrame, S: float, r: float, T: float, sig
 def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r: float, T: float) -> pd.DataFrame:
     """
     Cross-checks calls against puts at matching strikes using put-call
-    parity: C - P == S - K*e^(-rT). This is another no arbitrage
-    condition. 
+    parity: C - P == S - K*e^(-rT). 
 
     Reuses midPrice and tolerance on both calls and puts (via
     add_mid_price/apply_spread_tolerance if missing). Matches

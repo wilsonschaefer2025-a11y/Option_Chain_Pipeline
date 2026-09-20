@@ -109,7 +109,9 @@ def is_low_confidence(S: float, K: float, T: float, r: float, sigma: float, opti
     """
     Flags a solved implied volatility as low-confidence when the
     contract's |delta| < LOW_CONFIDENCE_DELTA (or > 1 - LOW_CONFIDENCE_DELTA),
-    following Duarte, Jones & Wang (2024, JF). Deep OTM or deep ITM
+    following Duarte, Jones & Wang (2024, JF). 
+    
+    Deep OTM or deep ITM
     contracts have such small vega that many different sigmas fit the
     observed price almost equally well, making it hard to trust the
     calculated sigma.

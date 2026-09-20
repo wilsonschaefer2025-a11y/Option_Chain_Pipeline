@@ -6,10 +6,12 @@ def fit_volatility_smile(strikes: pd.Series, implied_vols: pd.Series, S: float) 
     """
     Fits a smooth IV curve across strikes for one expiration, using a
     quadratic in log-moneyness: IV(K) = a + b*k + c*k^2, where
-    k = log(K/S). This is the standard shortcut for capturing a
-    chain's smile/skew shape without a full parametric model
-    (e.g. SVI) which may be implemented later but is currently
-    beyond the scope of this project. 
+    k = log(K/S). 
+    
+    This is a known shortcut for capturing a chain's 
+    smile/skew as implementing a full parametric model
+    (e.g. SVI) is currently beyond the scope of this project.
+    
     Note: c>0 means smile-shaped (OMT/ITM trade above ATM),
     b != 0 means skewed (tilted toward one side).
 
@@ -45,7 +47,9 @@ def fit_volatility_smile(strikes: pd.Series, implied_vols: pd.Series, S: float) 
 def smile_iv(strike, S: float, coeffs: np.ndarray):
     """
     Evaluates a fitted smile curve (from fit_volatility_smile) at a
-    given strike. This function works for any strike, including
+    given strike. 
+    
+    This function works for any strike, including
     ones with no clean quote of their own. strike accepts either a
     single value or a whole array/Series, since both log and polyval
     apply elementwise on their own.

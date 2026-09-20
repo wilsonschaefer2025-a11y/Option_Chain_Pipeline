@@ -64,7 +64,8 @@ IRX_DAYS_TO_MATURITY = 91
 def fetch_risk_free_rate(ticker_symbol: str = "^IRX") -> float:
     """
     Fetches an annualized, continuously-compounded risk-free rate from yfinance's
-    treasury ticker in the form BS expects.
+    treasury ticker.
+
     The default choice is ^IRX (13-week T-bill).
     Only tickers in TREASURY_RATE_CONFIG are supported as they 
     have different quoting conventions causing them to need
@@ -104,6 +105,7 @@ def time_to_expiration(expiration: str, stock_exchange: str) -> float:
     """
     Takes an expiration date and a stock exchange calendar and calculates
     the fraction of a trading year remaining until expiration.
+
     Uses mcal to filter out weekends, holidays, and early closes.
     """
     stock_exchange_loc = mcal.get_calendar(stock_exchange)
@@ -210,11 +212,11 @@ def trading_days_since(dates: pd.Series, stock_exchange: str, reference_time=Non
 def historical_volatility(ticker_symbol: str, period: str = "1y") -> float:
     """
     Computes the annualized realized (historical) volatility for a ticker
-    using its daily price movements. (This is different from implied
-    volatility, which is calculated using the option's price). This
-    sigma is independent of every option's price in the chain so it can be 
-    used to price a chain without circularly reusing a contract's own 
-    price against itself.
+    using its daily price movements. 
+    
+    Note: This sigma is independent of every option's price in the chain 
+    so it can be used to price a chain without circularly reusing a 
+    contract's own price against itself.
 
     period is a yfinance history period string (e.g "1y"). The function
     annualizes daily log-return volatility using the standard 
