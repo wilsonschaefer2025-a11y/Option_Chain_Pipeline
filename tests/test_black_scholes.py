@@ -65,6 +65,32 @@ def test_put_price_raises_for_non_positive_sigma():
         BS_put_price(S=100, K=100, T=1, r=0.05, sigma=-0.1)
 
 
+def test_call_price_raises_clear_error_for_non_positive_strike():
+    # Previously a raw ZeroDivisionError from inside _d1_d2, not a clear
+    # ValueError -- also holds for T<=0, where K used to be silently
+    # accepted since the intrinsic-value branch never crashed on it.
+    with pytest.raises(ValueError, match="must be positive"):
+        BS_call_price(S=100, K=0, T=1, r=0.05, sigma=0.2)
+    with pytest.raises(ValueError, match="must be positive"):
+        BS_call_price(S=100, K=0, T=0, r=0.05, sigma=0.2)
+
+
+def test_call_price_raises_clear_error_for_non_positive_spot():
+    # Previously a raw "math domain error" ValueError from math.log,
+    # not this function's own clear message.
+    with pytest.raises(ValueError, match="must be positive"):
+        BS_call_price(S=0, K=100, T=1, r=0.05, sigma=0.2)
+    with pytest.raises(ValueError, match="must be positive"):
+        BS_call_price(S=-5, K=100, T=1, r=0.05, sigma=0.2)
+
+
+def test_put_price_raises_clear_error_for_non_positive_strike_or_spot():
+    with pytest.raises(ValueError, match="must be positive"):
+        BS_put_price(S=100, K=-1, T=1, r=0.05, sigma=0.2)
+    with pytest.raises(ValueError, match="must be positive"):
+        BS_put_price(S=0, K=100, T=1, r=0.05, sigma=0.2)
+
+
 # ---------------------------------------------------------------------------
 # vega
 # ---------------------------------------------------------------------------
@@ -88,6 +114,15 @@ def test_vega_returns_zero_at_expiration():
 
 def test_vega_returns_zero_for_non_positive_sigma():
     assert vega(S=100, K=100, T=1, r=0.05, sigma=0.0) == 0.0
+
+
+def test_vega_raises_clear_error_for_non_positive_strike_or_spot():
+    # Even in the T<=0/sigma<=0 "return 0.0" branch, which previously
+    # accepted bad S/K silently since it never touched them.
+    with pytest.raises(ValueError, match="must be positive"):
+        vega(S=100, K=0, T=1, r=0.05, sigma=0.2)
+    with pytest.raises(ValueError, match="must be positive"):
+        vega(S=-1, K=100, T=0, r=0.05, sigma=0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +170,13 @@ def test_delta_raises_for_invalid_option_type():
 def test_delta_raises_for_non_positive_sigma():
     with pytest.raises(ValueError):
         delta(S=100, K=100, T=1, r=0.05, sigma=0.0, option_type="call")
+
+
+def test_delta_raises_clear_error_for_non_positive_strike_or_spot():
+    with pytest.raises(ValueError, match="must be positive"):
+        delta(S=100, K=0, T=1, r=0.05, sigma=0.2, option_type="call")
+    with pytest.raises(ValueError, match="must be positive"):
+        delta(S=0, K=100, T=0, r=0.05, sigma=0.2, option_type="put")
 
 
 # ---------------------------------------------------------------------------

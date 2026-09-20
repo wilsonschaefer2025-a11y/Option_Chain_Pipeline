@@ -482,31 +482,23 @@ def add_theoretical_price(calls: pd.DataFrame, S: float, r: float, T: float, sig
 def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r: float, T: float) -> pd.DataFrame:
     """
     Cross-checks calls against puts at matching strikes using put-call
-    parity: C - P == S - K*e^(-rT). Unlike every other filter in this
-    module, this is a pure no-arbitrage identity -- it needs no
-    volatility assumption at all, since it just compares the two sides
-    of the market against each other directly rather than against a
-    theoretical price.
+    parity: C - P == S - K*e^(-rT). This is another no arbitrage
+    condition. 
 
-    Reuses mid_price/tolerance on both calls and puts (via
-    add_mid_price/apply_spread_tolerance if missing). Matches strikes
-    present in both chains (inner join) -- a strike only listed as a
-    call or only as a put can't be checked, and is silently excluded
-    rather than flagged.
+    Reuses midPrice and tolerance on both calls and puts (via
+    add_mid_price/apply_spread_tolerance if missing). Matches
+    strikes present in both chains. It should be noted that
+    strikes with only listed call or put cannot be checked and
+    are excluded.
 
-    Skips (NA, not False) rows where either side is already flagged
-    unpriceable or invalid_strike_flag, if those columns are present --
-    same reasoning as add_implied_volatility: an unpriceable/invalid
-    quote makes the comparison meaningless, not informative, so it
-    shouldn't read as "checked and clean."
+    Skips rows where either side is already flagged unpriceable 
+    or invalid_strike_flag, if those columns are present.
 
-    parity_violation flags |residual| beyond the combined tolerance of
-    both sides (call tolerance + put tolerance) -- same "flag beyond
-    combined tolerance" pattern as filter_strike_monotonicity/convexity.
+    parity_violation flags the absolute value of residual beyond
+    the combined tolerance of both sides (call tolerance + 
+    put tolerance)
 
-    Returns a new DataFrame, one row per matched strike -- not calls or
-    puts modified in place, since this produces new joint information
-    rather than augmenting either existing chain on its own.
+    Returns a new DataFrame, one row per matched strike. 
     """
     calls = calls.copy()
     puts = puts.copy()

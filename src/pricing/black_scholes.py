@@ -18,6 +18,8 @@ def BS_call_price(S: float, K: float, T: float, r: float, sigma: float) -> float
     At/after expiration (T <= 0) returns the intrinsic value directly,
     since d1/d2 are undefined when T == 0.
     """
+    if S <= 0 or K <= 0:
+        raise ValueError(f"S and K must be positive, got S={S}, K={K}.")
     if T <= 0:
         return max(S - K, 0.0)
     if sigma <= 0:
@@ -31,6 +33,8 @@ def BS_put_price(S: float, K: float, T: float, r: float, sigma: float) -> float:
     """
     Black-Scholes price of a European put (same conventions as BS_call_price).
     """
+    if S <= 0 or K <= 0:
+        raise ValueError(f"S and K must be positive, got S={S}, K={K}.")
     if T <= 0:
         return max(K - S, 0.0)
     if sigma <= 0:
@@ -72,6 +76,8 @@ def delta(S: float, K: float, T: float, r: float, sigma: float, option_type: str
     """
     if option_type not in ("call", "put"):
         raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+    if S <= 0 or K <= 0:
+        raise ValueError(f"S and K must be positive, got S={S}, K={K}.")
     if T <= 0:
         if option_type == "call":
             return 1.0 if S > K else 0.0
@@ -91,6 +97,8 @@ def vega(S: float, K: float, T: float, r: float, sigma: float) -> float:
     Returns 0.0 at/after expiration or for non-positive sigma, since
     price is flat with respect to sigma there.
     """
+    if S <= 0 or K <= 0:
+        raise ValueError(f"S and K must be positive, got S={S}, K={K}.")
     if T <= 0 or sigma <= 0:
         return 0.0
 
