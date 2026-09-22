@@ -1,0 +1,7 @@
+yfinance>=1.6.0
+pandas>=2.3.3
+numpy>=2.3.5
+scipy>=1.16.3
+pandas_market_calendars>=5.4.0
+matplotlib>=3.10.6
+pytest>=8.4.2

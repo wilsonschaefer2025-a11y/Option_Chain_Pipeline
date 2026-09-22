@@ -22,11 +22,13 @@ from src.data.cleaning_options import (
 from src.pricing.smile import fit_volatility_smile
 from src.visualization import plot_smile, plot_price_comparison
 
-#Note: Currently built entirely by Claude. The main thing that's running through here 
-#is implied_spot has some stuff that more heavily relies on it here and 
+#Note: Currently built entirely by Claude. 
+# The main thing that has some build out here by Claude is implied_spot. 
+# Rest of the code was built before main.py existed and should be perfectly 
+# functional without this page. I had Claude build this for ease of use and practicality. 
 # 
 # Looking at revamping myself later but my main focus
-#of the project was the backend of the pipeline and less so the presentation. 
+#of the project was the backend of the pipeline.  
 
 
 def clean_chain(chain, S, r, T, sigma, option_type):
