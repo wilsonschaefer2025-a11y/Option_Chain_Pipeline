@@ -1,4 +1,4 @@
-# Option_Pricer
+# Option_Chain_Pipeline
 
 An end-to-end options analytics pipeline: fetches live option chains, flags
 data-quality issues using real market conventions, prices contracts via
@@ -77,8 +77,8 @@ small, since many volatilities then reproduce nearly the same price.
 ## Installation
 
 ```bash
-git clone <repo-url>
-cd Option_Pricer
+git clone https://github.com/wilsonschaefer2025-a11y/Option_Chain_Pipeline.git
+cd Option_Chain_Pipeline
 pip install -r requirements.txt
 ```
 
