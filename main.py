@@ -22,8 +22,12 @@ from src.data.cleaning_options import (
 from src.pricing.smile import fit_volatility_smile
 from src.visualization import plot_smile, plot_price_comparison
 
-#Note: Currently built with Claude. Looking at revamping myself later but my main focus
+#Note: Currently built entirely by Claude. The main thing that's running through here 
+#is implied_spot has some stuff that more heavily relies on it here and 
+# 
+# Looking at revamping myself later but my main focus
 #of the project was the backend of the pipeline and less so the presentation. 
+
 
 def clean_chain(chain, S, r, T, sigma, option_type):
     chain = filter_no_arbitrage(chain, S, r, T, option_type=option_type)

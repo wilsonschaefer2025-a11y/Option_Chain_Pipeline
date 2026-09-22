@@ -1214,6 +1214,30 @@ def test_filter_put_call_parity_skips_invalid_strike_flag_rows():
     assert pd.isna(result["parity_violation"].iloc[0])
 
 
+def test_filter_put_call_parity_skips_no_arb_violation_rows():
+    calls = pd.DataFrame({
+        "strike": [100.0], "mid_price": [8.0], "tolerance": [0.0], "no_arb_violation": [True],
+    })
+    puts = pd.DataFrame({
+        "strike": [100.0], "mid_price": [3.0], "tolerance": [0.0], "no_arb_violation": [False],
+    })
+    result = filter_put_call_parity(calls, puts, S=100.0, r=0.05, T=0.5)
+    assert pd.isna(result["parity_violation"].iloc[0])
+    assert pd.isna(result["parity_residual"].iloc[0])
+
+
+def test_filter_put_call_parity_computes_no_arb_violation_when_missing():
+    # No no_arb_violation column supplied -- a call priced above S (a
+    # textbook no-arbitrage violation on its own, independent of the put
+    # side) should still get auto-detected and skipped, not silently
+    # folded into the parity check as if it were a trustworthy quote.
+    calls = pd.DataFrame({"strike": [100.0], "mid_price": [150.0], "tolerance": [0.0]})
+    puts = pd.DataFrame({"strike": [100.0], "mid_price": [3.0], "tolerance": [0.0]})
+    result = filter_put_call_parity(calls, puts, S=100.0, r=0.05, T=0.5)
+    assert pd.isna(result["parity_violation"].iloc[0])
+    assert pd.isna(result["parity_residual"].iloc[0])
+
+
 def test_filter_put_call_parity_computes_mid_price_when_missing():
     S, T, r, sigma = 100, 0.5, 0.05, 0.25
     K = 100

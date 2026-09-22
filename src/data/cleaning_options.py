@@ -497,8 +497,11 @@ def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r:
     strikes with only listed call or put cannot be checked and
     are excluded.
 
-    Skips rows where either side is already flagged unpriceable, invalid_strike_flag, 
-    duplicate_strike_flag or non_standard_contract_size_flag if those columns are present.
+    Skips rows where either side is already flagged unpriceable, invalid_strike_flag,
+    duplicate_strike_flag, or non_standard_contract_size_flag if those columns are present.
+
+    Also skips rows flagged no_arb_violation. Unlike the other flags,
+    this one is computed here if missing, not just reused.
 
     parity_violation flags the absolute value of residual beyond
     the combined tolerance of both sides (call tolerance + 
@@ -510,8 +513,9 @@ def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r:
     else the function would break.
     
     Note: pd.merge only applies the _call/_put suffixes to columns present
-    on both frames, so a flag on one side only. 
+    on both frames, so a flag on one side only.
     """
+    
     calls = calls.copy()
     puts = puts.copy()
 
@@ -527,10 +531,15 @@ def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r:
     if "duplicate_strike_flag" not in puts.columns:
         puts = filter_contract_sanity(puts)
 
+    if "no_arb_violation" not in calls.columns:
+        calls = filter_no_arbitrage(calls, S, r, T, option_type="call")
+    if "no_arb_violation" not in puts.columns:
+        puts = filter_no_arbitrage(puts, S, r, T, option_type="put")
+
     keep_cols = [
         "strike", "mid_price", "tolerance",
         "unpriceable", "invalid_strike_flag", "duplicate_strike_flag",
-        "nonstandard_contract_size_flag",
+        "nonstandard_contract_size_flag", "no_arb_violation",
     ]
     call_cols = [c for c in keep_cols if c in calls.columns]
     put_cols = [c for c in keep_cols if c in puts.columns]
@@ -545,7 +554,7 @@ def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r:
     skip = pd.Series(False, index=merged.index)
     for flag_col in (
         "unpriceable", "invalid_strike_flag", "duplicate_strike_flag",
-        "nonstandard_contract_size_flag",
+        "nonstandard_contract_size_flag", "no_arb_violation",
     ):
         for col in (f"{flag_col}_call", f"{flag_col}_put", flag_col):
             if col in merged.columns:
