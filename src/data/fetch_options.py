@@ -13,7 +13,7 @@ def fetch_option_chain(ticker_symbol: str, expiration: str = None):
     
     Returns: (spot_price: float, calls: pd.DataFrame, puts: pd.DataFrame, expiration: str)
     """
-    ticker = yf.Ticker(ticker_symbol) # Option I'm pulling
+    ticker = yf.Ticker(ticker_symbol) 
 
     # --- 1. Spot price ---
     hist = ticker.history(period="1d")
@@ -101,16 +101,26 @@ def fetch_risk_free_rate(ticker_symbol: str = "^IRX") -> float:
 
 
 
-def time_to_expiration(expiration: str, stock_exchange: str) -> float:
+def time_to_expiration(expiration: str, stock_exchange: str, reference_time=None) -> float:
     """
     Takes an expiration date and a stock exchange calendar and calculates
     the fraction of a trading year remaining until expiration.
 
     Uses mcal to filter out weekends, holidays, and early closes.
+
+
+    reference_time defaults to now (New York time). If you want
+    to do deterministic testing pass a fixed value. Naive values are
+    read as New York time and aware ones are converted to it. 
     """
     stock_exchange_loc = mcal.get_calendar(stock_exchange)
     tz = ZoneInfo("America/New_York")
-    now = datetime.now(tz)
+
+    if reference_time is None:
+        reference_time = datetime.now(tz)
+    now = pd.Timestamp(reference_time)
+    now = now.tz_localize(tz) if now.tzinfo is None else now.tz_convert(tz)
+
     exp_date = date.fromisoformat(expiration)
 
     if exp_date < now.date():

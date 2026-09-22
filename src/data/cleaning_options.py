@@ -15,10 +15,15 @@ def add_mid_price(calls: pd.DataFrame) -> pd.DataFrame:
     Falls back to lastPrice if both bid and ask equal zero. 
     Flags rows as unpriceable when the resulting mid_price is zero.
     (No live quote on either side and no recent trade price)
+
+    If a bid or ask is NaN the function falls back to lastPrice. 
+
+    If a call doesn't have a mid_price it's considered unpriceable. 
     """
     calls = calls.copy()
 
-    has_valid_quote = (calls["bid"] > 0) | (calls["ask"] > 0)
+    both_sides_quoted = calls["bid"].notna() & calls["ask"].notna()
+    has_valid_quote = both_sides_quoted & ((calls["bid"] > 0) | (calls["ask"] > 0))
 
     calls["mid_price"] = np.where(
         has_valid_quote,
@@ -26,7 +31,7 @@ def add_mid_price(calls: pd.DataFrame) -> pd.DataFrame:
         calls["lastPrice"]
     )
 
-    calls["unpriceable"] = calls["mid_price"] == 0
+    calls["unpriceable"] = calls["mid_price"].isna() | (calls["mid_price"] == 0)
     calls["has_live_quote"] = has_valid_quote
 
     return calls
@@ -126,8 +131,10 @@ def filter_no_arbitrage(calls: pd.DataFrame, S: float, r: float, T: float, optio
         raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
 
     calls = calls.copy()
-    calls = add_mid_price(calls)
-    calls = apply_spread_tolerance(calls)
+
+    if "mid_price" not in calls.columns or "tolerance" not in calls.columns:
+        calls = add_mid_price(calls)
+        calls = apply_spread_tolerance(calls)
 
     discounted_strike = calls["strike"] * np.exp(-r * T)
 
@@ -219,6 +226,9 @@ def filter_strike_convexity(calls: pd.DataFrame) -> pd.DataFrame:
     if not already present). A violation is only flagged beyond the
     combined quoted tolerance of all three contracts involved, same
     reasoning as filter_strike_monotonicity.
+
+    Note: the wings' tolerances get the same distance weighting as their
+    prices. Unrolled, C2 > chord + combined_tolerance is exactly
     """
     calls = calls.copy()
 
@@ -237,7 +247,7 @@ def filter_strike_convexity(calls: pd.DataFrame) -> pd.DataFrame:
     weight_1 = (K3 - K2) / strike_span
     chord_value = weight_1 * C1 + (1 - weight_1) * C3
 
-    combined_tolerance = tol1 + calls["tolerance"] + tol3
+    combined_tolerance = weight_1 * tol1 + calls["tolerance"] + (1 - weight_1) * tol3
 
     calls["convexity_violation"] = C2 > chord_value + combined_tolerance
 
@@ -337,24 +347,18 @@ def filter_liquidity(
 
     return calls
 
-def filter_contract_sanity(calls: pd.DataFrame, expected_contract_size: int = 100) -> pd.DataFrame:
+def filter_contract_sanity(calls: pd.DataFrame, expected_contract_size: str = "REGULAR") -> pd.DataFrame:
     """
-    Flags basic structural problems with a contract row:
-      - invalid_strike_flag: strike is missing or <= 0.
-      - duplicate_strike_flag: the same strike appears more than once in
-        the chain. Rows already flagged invalid_strike_flag are
-        excluded here, so a problem is only ever reported once per row.
-      - nonstandard_contract_size_flag: contractSize isn't the standard
-        100-shares-per-contract. This happens for "adjusted" contracts
-        surviving certain corporate actions (special dividends,
-        spin-offs, some splits) that keep trading alongside new standard
-        contracts at the same strikes/expiration. It matters because
-        filter_no_arbitrage's bounds (S - K*e^(-rT) <= C <= S) implicitly
-        assume a 100-share multiplier. If contractSize isn't present
-        on the input at all, this flag is set to False for every row
-        as it can't be determined.
+    Flags a contract with invalid_strike_flag if the strike is missing 
+    or <= 0, with duplicate_strike_flag if the strike appears twice in
+    a chain (rows are skipped if they have invalid_strike_flag) or 
+    with nonstandard_contract_size_flag if the contractSize isn't the
+    standard 100-shares-per-contract. 
 
-    Does not drop rows, just flags them.
+    Note: yfinance marks contracts with 100-shares-per-contract contractSize as
+    REGULAR (not a number like 100). This means if you enter an integer into
+    expected_contract_size it will always return False. 
+    
     """
     calls = calls.copy()
 
@@ -377,10 +381,11 @@ def add_implied_volatility(calls: pd.DataFrame, S: float, r: float, T: float, op
     src/pricing/implied_vol.py).
 
     Skips rows already flagged unpriceable, invalid_strike_flag, or
-    no_arb_violation. This is particularly important because unpriceable
-    options won't automatically raise an error causing implied_volatility()
-    to generate a misleading sigma. Skipped rows, and rows where 
-    implied_volatility() raises get NA in both new columns. 
+    no_arb_violation, nonstandard_contract_size_flag. This is particularly 
+    important because unpriceable options won't automatically raise an error 
+    causing implied_volatility() to generate a misleading sigma. 
+    Skipped rows, and rows where implied_volatility() raises get NA in both 
+    new columns. 
 
     Reuses mid_price (via add_mid_price if missing), so this also works
     standalone on a raw chain.
@@ -388,7 +393,7 @@ def add_implied_volatility(calls: pd.DataFrame, S: float, r: float, T: float, op
     T is the time to expiration in years,
     Note: It must be computed via time_to_expiration before calling this. 
    
-    S/r are also constant across the whole chain 
+    S/r are also constant across the whole chain
     (one spot price, one risk-free rate), same as filter_no_arbitrage.
     """
     calls = calls.copy()
@@ -397,7 +402,10 @@ def add_implied_volatility(calls: pd.DataFrame, S: float, r: float, T: float, op
         calls = add_mid_price(calls)
 
     skip = pd.Series(False, index=calls.index)
-    for flag_col in ("unpriceable", "invalid_strike_flag", "no_arb_violation"):
+    for flag_col in (
+        "unpriceable", "invalid_strike_flag", "no_arb_violation",
+        "nonstandard_contract_size_flag",
+    ):
         if flag_col in calls.columns:
             skip = skip | calls[flag_col]
 
@@ -489,14 +497,20 @@ def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r:
     strikes with only listed call or put cannot be checked and
     are excluded.
 
-    Skips rows where either side is already flagged unpriceable 
-    or invalid_strike_flag, if those columns are present.
+    Skips rows where either side is already flagged unpriceable, invalid_strike_flag, 
+    duplicate_strike_flag or non_standard_contract_size_flag if those columns are present.
 
     parity_violation flags the absolute value of residual beyond
     the combined tolerance of both sides (call tolerance + 
     put tolerance)
 
-    Returns a new DataFrame, one row per matched strike. 
+    Returns a new DataFrame, one row per matched strike.
+
+    Note: Only the first occurence of a duplicated strike is kept or 
+    else the function would break.
+    
+    Note: pd.merge only applies the _call/_put suffixes to columns present
+    on both frames, so a flag on one side only. 
     """
     calls = calls.copy()
     puts = puts.copy()
@@ -508,18 +522,34 @@ def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r:
         puts = add_mid_price(puts)
         puts = apply_spread_tolerance(puts)
 
-    keep_cols = ["strike", "mid_price", "tolerance", "unpriceable", "invalid_strike_flag"]
+    if "duplicate_strike_flag" not in calls.columns:
+        calls = filter_contract_sanity(calls)
+    if "duplicate_strike_flag" not in puts.columns:
+        puts = filter_contract_sanity(puts)
+
+    keep_cols = [
+        "strike", "mid_price", "tolerance",
+        "unpriceable", "invalid_strike_flag", "duplicate_strike_flag",
+        "nonstandard_contract_size_flag",
+    ]
     call_cols = [c for c in keep_cols if c in calls.columns]
     put_cols = [c for c in keep_cols if c in puts.columns]
 
-    merged = pd.merge(calls[call_cols], puts[put_cols], on="strike", suffixes=("_call", "_put"))
+    merged = pd.merge(
+        calls[call_cols].drop_duplicates(subset="strike", keep="first"),
+        puts[put_cols].drop_duplicates(subset="strike", keep="first"),
+        on="strike",
+        suffixes=("_call", "_put"),
+    )
 
     skip = pd.Series(False, index=merged.index)
-    for flag_col in ("unpriceable", "invalid_strike_flag"):
-        if f"{flag_col}_call" in merged.columns:
-            skip = skip | merged[f"{flag_col}_call"]
-        if f"{flag_col}_put" in merged.columns:
-            skip = skip | merged[f"{flag_col}_put"]
+    for flag_col in (
+        "unpriceable", "invalid_strike_flag", "duplicate_strike_flag",
+        "nonstandard_contract_size_flag",
+    ):
+        for col in (f"{flag_col}_call", f"{flag_col}_put", flag_col):
+            if col in merged.columns:
+                skip = skip | merged[col]
 
     checkable = ~skip
 
@@ -542,3 +572,50 @@ def filter_put_call_parity(calls: pd.DataFrame, puts: pd.DataFrame, S: float, r:
     merged["parity_violation"] = violations
 
     return merged
+
+def implied_spot(parity: pd.DataFrame, S: float, min_strikes: int = 3) -> float:
+    """
+    Recovers the spot price an option chain is actually quoted against, by
+    inverting put-call parity: S = C - P + K*e^(-rT).
+
+    Recommended to take parity from filter_put_call_parity or else 
+    options with center violations could filter through. 
+
+    Takes a filter_put_call_parity result and the same S that was passed
+    into it. Since parity_residual is (C - P) - (S - K*e^(-rT)), adding a
+    residual back to S recovers the market's own spot. 
+
+    Why this is needed: the option chain and the spot quote come from
+    different endpoints and are not sampled at the same instant. On a
+    fast-moving day the whole chain can be quoted against a spot a dollar
+    or more away from the one fetched beside it. That gap is a level shift
+    across every strike at once, so it biases every implied volatility in
+    the chain.
+
+    Uses the median rather than the mean on purpose. Deep ITM/OTM strikes
+    have wide quotes whose residuals are noisy, and the median ignores
+    them instead of letting them drag the estimate.
+
+    Dividends: with a dividend paid before expiration, parity is really
+    C - P = S - PV(D) - K*e^(-rT), so what comes back is the
+    dividend-adjusted spot S - PV(D), not the traded share price. That is
+    the quantity this pricing model actually wants, since feeding
+    S - PV(D) into a q=0 Black-Scholes is the standard escrowed-dividend
+    adjustment. Downstream pricing therefore stays consistent, and on a
+    dividend payer it is closer to right than the raw spot would have
+    been. The caveat is in reading the number rather than using it: for a
+    name with an ex-date before expiration, the gap against the quoted
+    spot is quote-timing plus PV(D), not quote-timing alone, and the
+    returned value will sit below the price the share is trading at.
+
+    Raises ValueError if fewer than min_strikes strikes are checkable.
+    """
+    residuals = parity["parity_residual"].dropna()
+
+    if len(residuals) < min_strikes:
+        raise ValueError(
+            f"Need at least {min_strikes} checkable strikes to infer a spot "
+            f"from put-call parity, got {len(residuals)}."
+        )
+
+    return S + float(residuals.astype(float).median())

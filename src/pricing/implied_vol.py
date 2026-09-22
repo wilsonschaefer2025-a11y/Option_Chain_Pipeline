@@ -40,6 +40,20 @@ def implied_volatility(
     Raises ValueError if T <= 0 (volatility is undefined at/after
     expiration) or if 'price' falls outside this contract's no-arbitrage
     bounds, since no sigma could reproduce a price outside them.
+
+    Note: converging does not mean the answer is trustworthy. Where vega is
+    very small, which is the deep OTM/ITM and near-expiry region, many
+    different sigmas reproduce almost the same price, so the one returned
+    is poorly determined even though the solver reports success. Duarte,
+    Jones & Wang (2024, JF) handle this by filtering out options with
+    delta below 0.15. is_low_confidence() below applies the same test, but
+    it is opt-in: callers have to run it themselves on the sigma they get
+    back.
+
+    Note: MAX_SIGMA bounds only the bisection fallback, not Newton, which
+    can find a root above it. If Newton fails early and the true IV is
+    also above MAX_SIGMA, brentq has no sign change to bracket, and this
+    raises with a message naming the search range.
     """
     if option_type not in ("call", "put"):
         raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
@@ -68,14 +82,7 @@ def implied_volatility(
 
         if abs(diff) < price_tol:
             return sigma
-
-        # NOTE: low vega makes the sigma we get back less trustworthy. When vega is this small
-        # (deep OTM/near-expiry contracts) a lot of different sigmas give
-        # almost the same price, so it is hard to get an accurate calculation. 
-        # Duarte, Jones & Wang (2024, JF) deal with this by
-        # filtering out delta<0.15 options. is_low_confidence() below
-        # checks for this same thing, but it's opt-in. Callers have to
-        # call it themselves after getting a sigma back.
+        
         v = vega(S, K, T, r, sigma)
         if v < 1e-8:
             break  # vega too small meaning Newton step would blow up, fall back to bisection
@@ -88,12 +95,6 @@ def implied_volatility(
     def error(sigma):
         return price_fn(S, K, T, r, sigma) - price
 
-    # Newton doesn't respect MAX_SIGMA, as it can find a root above 5.0 on
-    # its own. This fallback only runs when Newton failed early (e.g. a
-    # near-zero-vega starting point), so if the true IV also happens to be
-    # above MAX_SIGMA, brentq's bracket won't contain a sign change and it
-    # raises a raw, confusing ValueError. Catch that and re-raise with a
-    # clear, project-specific message instead.
     try:
         return brentq(error, MIN_SIGMA, MAX_SIGMA, xtol=sigma_tol)
     except ValueError as e:

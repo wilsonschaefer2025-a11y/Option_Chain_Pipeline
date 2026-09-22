@@ -17,6 +17,7 @@ from src.data.cleaning_options import (
     add_implied_volatility,
     add_theoretical_price,
     filter_put_call_parity,
+    implied_spot,
 )
 from src.pricing.smile import fit_volatility_smile
 from src.visualization import plot_smile, plot_price_comparison
@@ -70,6 +71,10 @@ def main():
     parser.add_argument("--expiration", default=None, help="Expiration date (YYYY-MM-DD); defaults to nearest")
     parser.add_argument("--exchange", default="NYSE", help="Trading calendar to use (default: NYSE)")
     parser.add_argument("--period", default="1y", help="Lookback period for historical_volatility (default: 1y)")
+    parser.add_argument(
+        "--quoted-spot", action="store_true",
+        help="Use yfinance's quoted spot as-is instead of the spot inferred from put-call parity",
+    )
     parser.add_argument("--save", metavar="DIR", default=None, help="Save full cleaned calls/puts/parity tables as CSV to this directory")
     parser.add_argument("--plot", metavar="DIR", default=None, help="Save smile and price-comparison charts as PNGs to this directory")
     args = parser.parse_args()
@@ -83,10 +88,30 @@ def main():
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # The chain and the spot quote come from different endpoints and aren't
+    # sampled together, so the chain is often priced against a spot that
+    # differs from the one fetched beside it. Recover the market's own spot
+    # from put-call parity before anything downstream uses S -- every
+    # implied vol depends on it, not just the parity check.
+    quoted_S = S
+    spot_gap = None
+    if not args.quoted_spot:
+        try:
+            S = implied_spot(filter_put_call_parity(calls, puts, quoted_S, r, T), quoted_S)
+            spot_gap = S - quoted_S
+        except (ValueError, KeyError) as e:
+            print(f"Warning: using the quoted spot -- {e}", file=sys.stderr)
+
     print(
         f"{args.ticker} -- spot=${S:.2f}  expiration={expiration}  T={T:.4f}yr  "
         f"risk-free rate={r:.2%}  realized vol({args.period})={sigma:.2%}"
     )
+    if spot_gap is not None:
+        print(
+            f"  spot quoted ${quoted_S:.2f}, implied by parity ${S:.2f} "
+            f"({spot_gap:+.2f}) -- non-simultaneous quotes, plus PV(dividends) "
+            f"for any ex-date before expiration"
+        )
     print()
 
     calls = clean_chain(calls, S, r, T, sigma, option_type="call")
@@ -101,7 +126,12 @@ def main():
     checked = parity["parity_violation"].notna()
     print(f"--- Put-Call Parity ({checked.sum()} matched strikes checked) ---")
     if checked.any():
+        residuals = parity.loc[checked, "parity_residual"].astype(float)
         print(f"  violations: {parity.loc[checked, 'parity_violation'].mean():.1%}")
+        # With the spot inferred from these same residuals their median is ~0
+        # by construction, so the spread around it is the real signal: how
+        # far individual strikes stray from the chain's own consensus.
+        print(f"  residual spread: median {residuals.median():+.3f}, std {residuals.std():.3f}")
     print()
 
     call_coeffs = print_smile_fit("Calls", calls, S)

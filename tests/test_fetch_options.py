@@ -1,4 +1,5 @@
 import math
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -153,6 +154,88 @@ def test_time_to_expiration_increases_with_a_later_expiration():
     nearer = time_to_expiration("2035-06-15", "NYSE")
     farther = time_to_expiration("2036-06-15", "NYSE")
     assert farther > nearer
+
+
+# The intraday branches need a fixed clock to be reachable at all -- without
+# one, which of them runs depends on what day and time the suite happens to be
+# invoked, so they went untested. reference_time makes them deterministic, the
+# same way it already does for trading_days_since.
+#
+# 2026-09-22 is a normal Tuesday session (09:30-16:00 ET), so 12:45 is its
+# exact midpoint. Assertions are written as relationships between reference
+# times rather than hardcoded fractions, so they don't encode how many
+# sessions a particular year happens to have.
+
+def _ny(stamp):
+    return pd.Timestamp(stamp, tz="America/New_York")
+
+
+def test_time_to_expiration_counts_today_in_full_before_the_open():
+    # Nothing of the session has elapsed yet, so a same-day expiration still
+    # has the whole day left -- identical to standing at the opening bell.
+    before_open = time_to_expiration("2026-09-22", "NYSE", reference_time=_ny("2026-09-22 08:00"))
+    at_open = time_to_expiration("2026-09-22", "NYSE", reference_time=_ny("2026-09-22 09:30"))
+    assert before_open > 0
+    assert before_open == pytest.approx(at_open)
+
+
+def test_time_to_expiration_is_half_a_session_at_the_midpoint_of_the_day():
+    before_open = time_to_expiration("2026-09-22", "NYSE", reference_time=_ny("2026-09-22 08:00"))
+    midday = time_to_expiration("2026-09-22", "NYSE", reference_time=_ny("2026-09-22 12:45"))
+    assert midday == pytest.approx(before_open / 2)
+
+
+def test_time_to_expiration_is_zero_from_the_close_of_expiration_day():
+    assert time_to_expiration("2026-09-22", "NYSE", reference_time=_ny("2026-09-22 16:00")) == 0.0
+    assert time_to_expiration("2026-09-22", "NYSE", reference_time=_ny("2026-09-22 18:00")) == 0.0
+
+
+def test_time_to_expiration_decreases_as_the_session_progresses():
+    stamps = ["2026-09-22 09:30", "2026-09-22 11:00", "2026-09-22 12:45", "2026-09-22 15:00"]
+    values = [time_to_expiration("2026-09-22", "NYSE", reference_time=_ny(s)) for s in stamps]
+    assert values == sorted(values, reverse=True)
+
+
+def test_time_to_expiration_honors_an_early_close():
+    # 2026-11-27 (the day after Thanksgiving) closes at 13:00 ET, not 16:00.
+    # Its midpoint is therefore 11:15, and the session is already over at
+    # 13:00 -- a hardcoded 16:00 close would report ~46% of the day still
+    # remaining there instead of nothing.
+    before_open = time_to_expiration("2026-11-27", "NYSE", reference_time=_ny("2026-11-27 08:00"))
+    midday = time_to_expiration("2026-11-27", "NYSE", reference_time=_ny("2026-11-27 11:15"))
+    assert midday == pytest.approx(before_open / 2)
+    assert time_to_expiration("2026-11-27", "NYSE", reference_time=_ny("2026-11-27 13:00")) == 0.0
+
+
+def test_time_to_expiration_adds_no_fraction_of_today_on_a_weekend():
+    # 2026-09-19/20 are a Saturday and Sunday, so neither contributes any
+    # part of a session -- both should leave exactly Monday's session. A
+    # Friday pre-open reference leaves Friday plus Monday, i.e. twice as much.
+    saturday = time_to_expiration("2026-09-21", "NYSE", reference_time=_ny("2026-09-19 12:00"))
+    sunday = time_to_expiration("2026-09-21", "NYSE", reference_time=_ny("2026-09-20 12:00"))
+    friday_pre_open = time_to_expiration("2026-09-21", "NYSE", reference_time=_ny("2026-09-18 08:00"))
+    assert saturday == pytest.approx(sunday)
+    assert friday_pre_open == pytest.approx(2 * saturday)
+
+
+def test_time_to_expiration_reads_a_naive_reference_time_as_new_york_time():
+    # Matches trading_days_since's handling -- a naive stamp is the
+    # exchange's own clock, not UTC, which would shift it by four hours and
+    # land outside the session entirely.
+    naive = time_to_expiration("2026-09-22", "NYSE", reference_time=datetime(2026, 9, 22, 12, 45))
+    aware = time_to_expiration("2026-09-22", "NYSE", reference_time=_ny("2026-09-22 12:45"))
+    assert naive == pytest.approx(aware)
+
+
+def test_time_to_expiration_converts_an_aware_reference_time_to_new_york():
+    # 16:45 UTC is 12:45 ET, so this must agree with the midpoint above.
+    utc = time_to_expiration("2026-09-22", "NYSE", reference_time=pd.Timestamp("2026-09-22 16:45", tz="UTC"))
+    aware = time_to_expiration("2026-09-22", "NYSE", reference_time=_ny("2026-09-22 12:45"))
+    assert utc == pytest.approx(aware)
+
+
+def test_time_to_expiration_returns_zero_for_a_past_date_against_a_fixed_clock():
+    assert time_to_expiration("2026-09-18", "NYSE", reference_time=_ny("2026-09-22 12:00")) == 0.0
 
 
 # ---------------------------------------------------------------------------

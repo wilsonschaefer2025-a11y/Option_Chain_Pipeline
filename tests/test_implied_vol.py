@@ -88,3 +88,21 @@ def test_is_low_confidence_true_for_deep_itm_call():
     # vega problem as deep OTM but on the other side. Verifies the
     # ITM-side fix: |delta| > 1 - LOW_CONFIDENCE_DELTA also flags.
     assert is_low_confidence(S=150, K=100, T=0.05, r=0.05, sigma=0.2, option_type="call") == True
+
+
+def test_is_low_confidence_true_for_deep_otm_put():
+    # Deep OTM put is a strike far *below* spot -- the mirror of the call
+    # case. Put delta is negative, so this also confirms the abs() is
+    # what makes the shared threshold work for both option types.
+    assert is_low_confidence(S=100, K=50, T=0.1, r=0.05, sigma=0.2, option_type="put") == True
+
+
+def test_is_low_confidence_false_for_near_atm_put():
+    assert is_low_confidence(S=100, K=100, T=1, r=0.05, sigma=0.2, option_type="put") == False
+
+
+def test_is_low_confidence_true_for_deep_itm_put():
+    # Deep ITM put -- delta approaches -1, so |delta| > 1 - LOW_CONFIDENCE_DELTA.
+    # Without the abs() this side would compare -1 < 0.15 and flag for the
+    # wrong reason, so the put ITM case is worth pinning separately.
+    assert is_low_confidence(S=50, K=100, T=0.05, r=0.05, sigma=0.2, option_type="put") == True
