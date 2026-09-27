@@ -187,13 +187,15 @@ main.py                         # CLI entry point
 tests/                          # 215 tests
 ```
 
-**Flag, don't drop**: none of the data is removed. Instead 
+**Couple important notes**
+
+The pipeline only flags and does not drop data. This means
+none of the data is removed by the cleaning functions. Instead 
 each check writes a boolean column. This allows the user to decide
 which flags to drop from the data and which to keep. 
 
-**Time-to-expiration is measured in trading sessions**, not calendar days
-using `pandas_market_calendars`. It also gives partial credit for the current 
-session and for early closes (e.g. the day after Thanksgiving). 
+Time-to-expiration is measured in trading sessions, using `pandas_market_calendars`. 
+It also gives partial credit for the current  session and for early closes (e.g. the day after Thanksgiving). 
 
 
 ## Running tests
