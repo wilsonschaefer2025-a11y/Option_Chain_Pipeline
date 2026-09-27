@@ -1,10 +1,9 @@
 # Option_Chain_Pipeline
 
-An end-to-end options analytics pipeline: fetches live option chains, flags
-data-quality issues using real market conventions, prices contracts via
-Black-Scholes, solves implied volatility with a confidence check, fits a
-volatility smile, cross-validates calls against puts, and reports/visualizes
-results, all from one CLI command.
+An options analytics pipeline: fetches live option chains, flags data-quality issues, prices contracts using Black-Scholes, solves implied volatility with a confidence check, fits a volatility smile and cross-validates calls against puts.
+
+Also offers visualizations and reports for results. 
+Only needs one CLI command to operate.
 
 ## What it does
 
