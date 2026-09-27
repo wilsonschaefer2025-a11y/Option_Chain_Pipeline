@@ -25,54 +25,89 @@ Given a ticker, the pipeline:
 
 ## Data and methodology
 
-The pricing formulas themselves are standard. This section documents the
-data-quality handling built around them, and the observations from live chains
-that motivated each choice.
+The pricing formulas are Black-Scholes. The majority of the 
+work of this pipeline is fetching data and cleaning that 
+data.  
 
-**Non-simultaneous quotes.** The chain and the spot price are retrieved from
-different endpoints, so on a moving day the chain is priced against a spot that
-has already drifted. Measured across SPY, QQQ and AAPL the gap ran $0.52-$0.94,
-with residuals 100% one-sided and dispersion roughly 6x smaller than the offset,
-indicating a level shift rather than noise and one no bid/ask tolerance can
-absorb. Uncorrected, this biased every solved implied volatility by 0.5-0.9 vol
-points. `implied_spot` inverts put-call parity across the chain to recover the
-spot the options are quoted against; spurious arbitrage flags on SPY fell from
-78% to 19%, with residual dispersion unchanged.
+### Data 
 
-**Executable no-arbitrage screens.** Because `mid ± half-spread` is algebraically
-`bid`/`ask`, each screen reduces exactly to a trade that clears at quoted prices:
+All data comes from yfinace
 
-| screen | reduces to |
-|---|---|
-| no-arbitrage lower | `ask < S - Ke^(-rT)` (buy below the floor) |
-| no-arbitrage upper | `bid > S` (sell above the ceiling) |
-| strike monotonicity | `bid(K2) > ask(K1)` (vertical spread for a credit) |
-| strike convexity | `bid(K2) > w·ask(K1) + (1-w)·ask(K3)` (butterfly for a credit) |
-| put-call parity | `bid(C) - ask(P) > S - Ke^(-rT)` (conversion/reversal) |
+Inputs and Sources:
 
-The tolerance is therefore derived rather than chosen. This framing also
-identified an error in the convexity screen, which distance-weighted the prices
-but not the tolerances, leaving it roughly 2x too lenient and admitting
-butterflies worth up to $23/contract. Tested against 3,000 randomized strike
-triplets, the corrected form agrees with the executable condition in every case;
-the previous form agreed in 98.1%, with every disagreement a false negative.
+Spot "S": Latest close from `history(period="1d")`. Replaced with 
+implied_spot (spot inferred from the parity).
 
-**Threshold sourcing.** Spread quality follows CBOE's tick rules (pennies below
-$3, nickels at or above), so a $0.01x$0.02 contract is treated as tick-bound
-rather than as a 67% spread. The implied volatility confidence threshold follows
-Duarte, Jones & Wang (2024, *Journal of Finance*). Realized volatility is computed
-from price history rather than from an option's own price, so the comparison of
-market against theoretical prices is not circular.
+Option Chain: `option_chain(expiration)` pulls the nearest expiry 
+by default
 
-**Feed representations.** `contractSize` is reported as the string `"REGULAR"`
-rather than as a share count, so comparison against `100` flagged every contract
-in every chain. `bid` and `ask` may be `NaN` rather than `0`, which caused rows
-with no price to be treated as priceable and produced a `NaN` tolerance,
-disabling violation checks on both that row and its neighbour.
+Risk-free rate `r`: `^IRX` (13-week T-bill) is the default. ^FVX`/`^TNX`/`^TYX`
+are supported by fetch_risk_free_rate but are not appart of the CLI  
 
-**Implied volatility solver.** Newton-Raphson with a bisection fallback on
-convergence failure. Converged results are separately flagged where vega is
-small, since many volatilities then reproduce nearly the same price.
+Time to expiry `T`: Trading sessions left (today's remaining fraction + full sessions to expiry) ÷ sessions in the year. This is done using pandas_market_calendars
+
+Realized vol `σ`: Zero-mean RMS of daily log returns × √252 over `--period`
+
+
+A couple things to note: 
+-`contractSize` is a string in yfinance ("REGULAR)
+and not an integer (e.g. 100)
+-`bid`/`ask` can be NaN. In that case midprice cannot be 
+calculated and the price falls back to `lastPrice`. 
+
+### Spot Correction 
+
+It was discovered that the spot and chain came from different endpoints and are 
+not sampled together. This showed up in data as the bulk of the parity
+residuals having the same sign. Other causes were ruled out (dividends and 
+interest rates) as the gap did not grow from 1 to 30 day expirations as expected
+with these two cases. To solve this issue an implied_spot calculation was implemented.
+
+`implied_spot` inverts put-call parity (`S = C - P + K·e^(-rT)`) at each clean
+matched strike and takes the median. The result replaces the quoted spot
+everywhere downstream. `--quoted-spot` disables this.
+
+### No-arbitrage screens
+
+Contracts are valued at the mid price, with a tolerance of half the spread. The
+tolerance is zero for missing or crossed quotes. This logic works sense 
+`mid ± half-spread` is equivalent to `bid`/`ask` meaning each screen flags
+a contract only when a trade could be made at the quoted prices. 
+
+Screen and Flags:
+
+Lower bound: `ask < max(S - Ke^(-rT), 0)` 
+Upper bound: `bid > S`
+Monotonicity:  `bid(K2) > ask(K1)`, `K1 < K2`
+Convexity: `bid(K2) > w·ask(K1) + (1-w)·ask(K3)`
+Put-call parity:  `bid(C) - ask(P) > S - Ke^(-rT)` or `ask(C) - bid(P) < S - Ke^(-rT)`
+
+### Liquidity Flags
+
+`illiquid_flag` combines these checks, and each one is also kept as its own
+column:
+
+- Open interest or volume in the chain's bottom 10%
+- Spread in the top 10%, measured beyond CBOE's minimum tick ($0.01 under $3,
+  $0.05 at or above), so tick-bound cheap contracts aren't penalized
+- No live quote, or a crossed quote
+- No trade since before the previous session
+
+Missing or non-positive strikes, duplicate strikes, and non-standard contract
+sizes are flagged separately.
+
+### Implied volatility and smile
+
+The IV is solved using Newton-Raphson. If this fails it falls back to 
+Brent's method. Unpriceable contracts and those violating arbitrage 
+are skipped. Using the logic established by Duarte, Jones and Wang (2024 *JF*),
+a solved IV is flagged low-confidence when `|Δ| < 0.15` or `|Δ| > 0.85`,
+since the vega there is too small to pin down σ.
+
+The theoretical prices use the realized volatility and not the contract's own
+IV. This is used to avoid circular comparisons. The smile, `IV = a + b·k + c·k²`
+with `k = ln(K/S)`, is fitted by least squares to high-confidence IVs only.
+
 
 ## Installation
 
