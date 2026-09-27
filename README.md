@@ -187,11 +187,14 @@ main.py                         # CLI entry point
 tests/                          # 215 tests
 ```
 
-**Flag, don't drop**: nothing is silently removed. Every check writes a boolean
-column and leaves the caller to decide, so a contract can fail one screen and remain
-usable for another. **Time-to-expiry is measured in trading sessions**, not calendar
-days, via `pandas_market_calendars`, including partial credit for the current session
-and real early closes (the day after Thanksgiving is 09:30-13:00, not 09:30-16:00).
+**Flag, don't drop**: none of the data is removed. Instead 
+each check writes a boolean column. This allows the user to decide
+which flags to drop from the data and which to keep. 
+
+**Time-to-expiration is measured in trading sessions**, not calendar days
+using `pandas_market_calendars`. It also gives partial credit for the current 
+session and for early closes (e.g. the day after Thanksgiving). 
+
 
 ## Running tests
 
