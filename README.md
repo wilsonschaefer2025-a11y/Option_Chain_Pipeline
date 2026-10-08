@@ -61,7 +61,7 @@ The tests check results against known values and independent methods: Greeks by 
 - Single-expiration scope, with no multi-expiration term structure or full vol surface yet
 - Near-expiry ATM options also have low vega, and the delta-only flag misses them
 
-**Claude Usage**
+## Claude Usage
 
 Claude built the CLI and the visualization code entirely. I found these helpful for running the pipeline and seeing the results, as my main focus for the project was the methodology rather than the software design itself. Claude also designed the tests for the model. This was done to help catch errors in code. My next step for the project is to run through and build some of my own tests. Claude also helped clean up syntax and fix bugs in code throughout the project.
 
