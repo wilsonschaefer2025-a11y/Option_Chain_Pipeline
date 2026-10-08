@@ -22,8 +22,7 @@ from src.data.cleaning_options import (
 from src.pricing.smile import fit_volatility_smile
 from src.visualization import plot_smile, plot_price_comparison
 
-#Note: Currently built entirely by Claude. 
-# The main thing that has some build out here by Claude is implied_spot. 
+#Note: Currently built entirely by Claude.
 # Rest of the code was built before main.py existed and should be perfectly 
 # functional without this page. I had Claude build this for ease of use and practicality. 
 # 
